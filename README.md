@@ -69,6 +69,8 @@ package is organised around independent checks rather than around the estimator.
 | Reference implementation, draw by draw | any deviation from the published method | **1e-12** on α, D = 1…12 |
 | Gradient of the center-correlation cost vs finite differences | a wrong subspace that still looks plausible | < 1e-6 |
 | Stiefel optimizer on a problem with a known optimum | optimizer bug | recovers top eigenvectors exactly |
+| Subspace search against a *planted* subspace | a plausible-but-wrong subspace | exact rank, cosines > 0.95 |
+| Chance-level (null) reduction on isotropic centers | inventing structure that is not there | abstains, K = 0 |
 | **Direct simulation** | **a misapplied theory that all the above share** | see below |
 
 The last row is the one that matters. Everything else validates the *implementation* of the
@@ -150,21 +152,44 @@ the shared structure, project it out — with a closed-form gradient (O(P²K) in
 
 Whether the correction makes the theory *predict reality* is a separate question from whether
 the optimizer finds the subspace, and only simulation can answer it. Planting a rank-3 shared
-component in the centers and sweeping its strength:
+component in the centers and sweeping its strength (P = 60, N = 120):
 
 | planted strength | 0.00 | 0.40 | 0.70 | 0.85 | 0.95 |
 |---|---|---|---|---|---|
-| mean \|cos\| between centers | 0.10 | 0.12 | 0.25 | 0.36 | 0.46 |
-| theory, uncorrected | 1.118 | 1.117 | 1.117 | 1.117 | 1.110 |
-| theory, corrected | 1.064 | 1.050 | 0.867 | 0.749 | 0.519 |
-| **direct simulation** | **1.150** | **1.050** | **0.956** | **0.753** | **0.560** |
+| mean \|cos\| between centers | 0.07 | 0.11 | 0.25 | 0.36 | 0.44 |
+| theory, uncorrected | 1.189 | 1.194 | 1.191 | 1.188 | 1.189 |
+| theory, corrected | 1.189 | 1.120 | 1.013 | 0.856 | 0.605 |
+| **direct simulation** | **1.172** | **1.160** | **1.025** | **0.886** | **0.626** |
+| selected K (argmin would give) | 0 (10) | 7 (9) | 3 (10) | 3 (8) | 3 (8) |
 
 The uncorrected prediction is **flat** — it cannot see the correlation at all — while the true
-capacity falls by half. Mean absolute error against simulation: **0.235 uncorrected → 0.044
-corrected**. Note the honest cost: at zero correlation the correction slightly over-projects
-(1.064 vs 1.150 true), so it is not free when there is nothing to correct. Check
-`CenterSubspace.by_K`; a flat curve means there is no low-rank structure and the projection is
-removing signal.
+capacity falls by half. Mean absolute error against simulation: **0.216 uncorrected → 0.024
+corrected**, a 9× improvement. At zero correlation the routine correctly declines to project
+anything, so the corrected and uncorrected columns coincide there by construction.
+
+### Choosing K is where this goes wrong, and the obvious rule is the wrong one
+
+Residual correlation decreases almost monotonically in K — there is always one more direction
+whose removal helps a little — so taking the outright **argmin**, which is what the reference
+implementation does, systematically over-estimates the rank: on data with a *planted rank 3* it
+selects K = 8–10, and at zero planted correlation it still selects 10 (see the last row above).
+Over-projection is not free — every removed direction is one the classifier could have used — so
+it biases capacity **downward**. With argmin the corrected column undershot the simulation at
+every strength and the mean error was 0.063; the two guards below cut that to 0.024.
+
+Two guards, both on by default:
+
+- **Elbow instead of argmin** (`k_tol`): take the smallest K within 5% of the best achievable
+  reduction. This recovers the planted rank exactly (K = 3) at strength ≥ 0.7, with
+  principal-angle cosines 0.95–0.995 against the planted basis.
+- **A measured null** (`n_null`): fitting K directions to P centers removes correlation whether
+  or not any is there — about 10% of the baseline for P = 60 isotropic centers, which is right at
+  any plausible fixed threshold. `centers.null_reduction` runs the identical search on matched
+  isotropic centers and returns the chance level, so only reductions above it count as evidence.
+  With it, the strength-0 case correctly returns **K = 0 and projects nothing**.
+
+`k_tol=0, min_reduction=0` reproduces the reference's behaviour for comparison with published
+numbers. Always inspect `by_K`, `K_argmin` and `reduction` before trusting a corrected capacity.
 
 ## Layout
 
@@ -183,7 +208,7 @@ scripts/
   01_validate_points.py            closed form vs estimator vs direct simulation
   02_validate_balls_and_segments.py  exact balls, sampling bias, and a theory-free threshold
   03_validate_correlated_centers.py  does the correction make theory match simulation?
-tests/                             78 tests
+tests/                             82 tests
 ```
 
 ## Setup
@@ -192,7 +217,7 @@ tests/                             78 tests
 conda create -n mancap -c conda-forge python=3.12 numpy scipy matplotlib pytest scikit-learn tqdm -y
 conda activate mancap
 pip install -e D:\dev\manifold-capacity --no-deps
-pytest                              # 78 tests, ~2 min
+pytest                              # 82 tests, ~2.5 min
 ```
 
 Run the validations (each writes JSON to `data/` and a figure to `figures/`):

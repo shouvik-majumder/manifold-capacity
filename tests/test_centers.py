@@ -13,6 +13,7 @@ from mancap import build_frames, center_correlation, synth
 from mancap.centers import (
     check_gradient,
     find_center_subspace,
+    null_reduction,
     residual_correlation,
     square_corrcoeff_cost,
     stiefel_minimize,
@@ -122,37 +123,79 @@ def test_stiefel_minimize_finds_the_top_subspace_of_a_quadratic():
 # ----------------------------------------------------------------------------------------------
 
 def test_finds_the_planted_subspace():
-    """Recovering the planted directions, not merely lowering a number.
+    """Recovering the planted RANK and the planted DIRECTIONS, not merely lowering a number.
 
-    Measured by principal angles between the recovered basis and the planted one. Getting the
-    rank right AND the directions right is the real test; residual correlation could fall by
-    projecting out almost anything.
+    Residual correlation could fall by projecting out almost anything, so the test is principal
+    angles against the known planted basis plus an exact rank match.
     """
-    Xs, U, _ = planted(P=24, N=120, K=3, strength=0.9, seed=7)
+    Xs, U, _ = planted(P=60, N=120, K=3, strength=0.9, seed=7)
     res = find_center_subspace(Xs, n_restarts=3, rng=np.random.default_rng(8))
 
-    assert res.residual < 0.6 * res.baseline, (
-        f"residual {res.residual:.4f} vs baseline {res.baseline:.4f}"
+    assert res.K == 3, f"planted rank 3, recovered {res.K} (argmin would give {res.K_argmin})"
+    assert res.reduction > 0.5, f"only removed {res.reduction:.2f} of the correlation"
+    sv = np.linalg.svd(U.T @ res.basis, compute_uv=False)
+    assert float(np.min(sv)) > 0.9, f"principal-angle cosines {sv}"
+
+
+def test_elbow_beats_argmin_at_recovering_the_rank():
+    """The reason the selection rule is not argmin.
+
+    Residual correlation keeps creeping down with K, so the outright minimum over-estimates the
+    rank -- and over-projection removes directions the classifier could have used, biasing
+    capacity downward. The elbow rule must find a strictly smaller, correct rank.
+    """
+    Xs, _, _ = planted(P=60, N=120, K=3, strength=0.9, seed=17)
+    res = find_center_subspace(Xs, n_restarts=3, rng=np.random.default_rng(18))
+    assert res.K == 3
+    assert res.K_argmin > res.K, (
+        f"argmin {res.K_argmin} should over-estimate the planted rank 3"
     )
-    assert res.K >= 2, f"planted rank 3, recovered {res.K}"
-
-    # The planted subspace should be largely contained in the recovered one.
-    k = min(res.K, U.shape[1])
-    sv = np.linalg.svd(U.T @ res.basis, compute_uv=False)[:k]
-    assert float(np.mean(sv)) > 0.8, f"principal-angle cosines {sv}"
 
 
-def test_uncorrelated_centers_leave_little_to_remove():
-    """With isotropic centers the baseline is already low and the correction gains little.
+def test_uncorrelated_centers_get_no_projection_at_all():
+    """The correction must not invent structure.
 
-    The correction must not invent structure. If it reported a large improvement here, it would
-    be fitting noise, and every capacity computed through it on real data would be suspect.
+    With isotropic centers there is nothing to remove, and the routine must return an EMPTY
+    subspace so that the correction becomes a no-op. Fitting a subspace here would remove real
+    directions and quietly cost capacity -- which is exactly what happened before the guard
+    existed.
     """
     rng = np.random.default_rng(9)
-    Xs = synth.balls(24, 400, D=4, radius=0.2, M=25, rng=rng)
-    res = find_center_subspace(Xs, max_K=4, n_restarts=2, rng=np.random.default_rng(10))
-    assert res.baseline < 0.2, f"isotropic baseline unexpectedly high: {res.baseline:.3f}"
-    assert res.residual > 0.2 * res.baseline, "correction removed too much from random centers"
+    Xs = synth.balls(30, 200, D=4, radius=0.2, M=25, rng=rng)
+    res = find_center_subspace(Xs, max_K=6, n_restarts=2, rng=np.random.default_rng(10))
+    assert res.K == 0, f"projected rank {res.K} onto isotropic centres"
+    assert res.basis.shape[1] == 0
+    assert res.residual == pytest.approx(res.baseline)
+
+
+def test_null_reduction_is_positive_and_usable_as_a_threshold():
+    """Chance-level reduction is not zero, which is why a fixed threshold is the wrong guard.
+
+    Fitting K directions to P centres always removes some correlation. The null measures how
+    much, for this P and N, so that only reductions above it count as evidence.
+    """
+    nr = null_reduction(P=30, N=150, n_null=2, max_K=6, rng=np.random.default_rng(20))
+    assert 0.0 < nr < 0.6, f"implausible chance-level reduction {nr:.3f}"
+
+
+def test_null_guard_abstains_on_isotropic_data():
+    """With n_null > 0 the threshold is measured rather than assumed, and must abstain here."""
+    rng = np.random.default_rng(21)
+    Xs = synth.balls(30, 150, D=4, radius=0.2, M=20, rng=rng)
+    res = find_center_subspace(
+        Xs, max_K=6, n_restarts=2, n_null=2, rng=np.random.default_rng(22)
+    )
+    assert res.K == 0, f"null guard failed to abstain, projected rank {res.K}"
+
+
+def test_argmin_behaviour_is_still_reachable():
+    """k_tol=0, min_reduction=0 reproduces the reference's rule, for comparison with published
+    numbers."""
+    Xs, _, _ = planted(P=40, N=120, K=3, strength=0.9, seed=23)
+    res = find_center_subspace(
+        Xs, n_restarts=2, k_tol=0.0, min_reduction=0.0, rng=np.random.default_rng(24)
+    )
+    assert res.K == res.K_argmin
 
 
 def test_projection_reduces_measured_center_correlation():

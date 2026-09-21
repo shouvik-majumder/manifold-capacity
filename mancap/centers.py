@@ -222,6 +222,10 @@ class CenterSubspace:
     by_K         Residual correlation for every K tried, so the choice of K is visible as a curve
                  rather than asserted. A flat curve means no low-rank structure exists and the
                  correction is doing nothing useful.
+    K_argmin     The rank that minimises residual correlation outright. Reported alongside K
+                 because they differ, and the difference is the point -- see `find_center_subspace`.
+    reduction    (baseline - min(by_K)) / baseline: the fraction of center correlation that the
+                 best subspace removes. Small values mean there is no low-rank structure to find.
     """
 
     basis: np.ndarray
@@ -229,7 +233,43 @@ class CenterSubspace:
     residual: float
     baseline: float
     by_K: np.ndarray
+    K_argmin: int = 0
+    reduction: float = 0.0
     span: np.ndarray = field(repr=False, default=None)
+
+
+def null_reduction(
+    P: int,
+    N: int,
+    n_null: int = 3,
+    max_K: int | None = None,
+    n_restarts: int = 2,
+    rng: np.random.Generator | None = None,
+) -> float:
+    """Reduction in center correlation achievable on ISOTROPIC centers: the chance level.
+
+    Fitting a K-dimensional subspace to P centers always removes some correlation, whether or not
+    any is there -- with P = 60 centers in 59 dimensions the search removes about 10% of the
+    baseline from purely isotropic centers. A fixed threshold cannot distinguish that from real
+    structure, because the chance level depends on P, N and the ranks tried.
+
+    This runs the identical search on matched isotropic centers and returns the largest reduction
+    it manages. Use it as the threshold: only reductions above the null are evidence of structure.
+
+    Returns:
+        The maximum reduction over `n_null` isotropic draws.
+    """
+    rng = np.random.default_rng() if rng is None else rng
+    out = []
+    for _ in range(n_null):
+        C = rng.standard_normal((N, P))
+        C /= np.linalg.norm(C, axis=0, keepdims=True)
+        fake = [C[:, [p]] for p in range(P)]
+        r = find_center_subspace(
+            fake, max_K=max_K, n_restarts=n_restarts, min_reduction=0.0, rng=rng
+        )
+        out.append(r.reduction)
+    return float(max(out))
 
 
 def find_center_subspace(
@@ -237,25 +277,62 @@ def find_center_subspace(
     max_K: int | None = None,
     n_restarts: int = 3,
     max_iter: int = 500,
+    k_tol: float = 0.05,
+    min_reduction: float = 0.10,
+    n_null: int = 0,
     rng: np.random.Generator | None = None,
     verbose: bool = False,
 ) -> CenterSubspace:
     """Locate the low-rank structure shared by the manifold centers.
 
+    CHOOSING K IS WHERE THIS GOES WRONG, AND THE OBVIOUS RULE IS THE WRONG ONE
+    --------------------------------------------------------------------------
+    Residual correlation decreases almost monotonically in K -- there is always one more
+    direction whose removal helps a little -- so taking the outright argmin (which is what the
+    reference implementation does) systematically over-estimates the rank. Measured on data with
+    a PLANTED rank-3 component and P = 60 manifolds, argmin selects K = 8-10, and at zero planted
+    correlation it still selects 10. That is not free: every removed direction is one the
+    classifier could have used, so over-projection biases capacity DOWNWARD. In the validation
+    run it made the corrected prediction undershoot the simulated capacity at every correlation
+    strength.
+
+    Two guards, both on by default:
+
+      k_tol         Take the SMALLEST K that gets within `k_tol` of the best achievable
+                    reduction, rather than the K that achieves it. This finds the elbow of the
+                    curve, which is where the planted rank actually sits.
+      min_reduction If the best subspace removes less than this fraction of the baseline
+                    correlation, there is no low-rank structure worth removing, and an EMPTY
+                    subspace is returned (K = 0, the correction becomes a no-op). Without this,
+                    the routine invents structure in isotropic centers and the correction costs
+                    capacity for nothing.
+
+    The default min_reduction of 0.10 is a heuristic, and a weak one: the chance-level reduction
+    depends on P, N and the ranks tried, not on a universal constant. With P = 60 centers the
+    search removes about 10% of the baseline from purely isotropic centers, right at the
+    threshold. Passing `n_null > 0` replaces the heuristic with a measured null -- the same search
+    run on matched isotropic centers -- which is the defensible version and what real data
+    deserves. It costs `n_null` extra searches.
+
+    Set k_tol=0 and min_reduction=0 to reproduce the reference's argmin behaviour.
+
     Args:
         Xs: The manifolds, each (N, M_i). Only their centers are used.
         max_K: Largest rank to try. Defaults to the number of components holding 95% of the
-            center variance, plus a margin, capped at P-2. Trying more costs time and risks
-            over-projecting: every removed direction is a direction the classifier can no longer
-            use, so K should be as small as the residual-correlation curve allows.
+            center variance, plus a margin, capped at P-2.
         n_restarts: Random restarts per K. The cost is not convex on the Stiefel manifold, so the
             best of several runs is kept.
         max_iter: Iterations per restart.
+        k_tol: Elbow tolerance, as a fraction of the best achievable reduction.
+        min_reduction: Below this fractional reduction, return no subspace at all.
+        n_null: If > 0, measure the chance-level reduction on matched isotropic centers and use
+            it in place of `min_reduction`. Slower, and correct.
         rng: Random generator.
         verbose: Print the residual correlation at each K.
 
     Returns:
-        CenterSubspace.
+        CenterSubspace. Always inspect `by_K`, `K_argmin` and `reduction` before trusting a
+        corrected capacity: they say whether the structure being removed is real.
     """
     rng = np.random.default_rng() if rng is None else rng
     Xs = [np.asarray(X, dtype=np.float64) for X in Xs]
@@ -299,12 +376,41 @@ def find_center_subspace(
             break
 
     by_K = np.array(best_by_K)
-    K_best = int(np.argmin(by_K)) + 1
+    K_argmin = int(np.argmin(by_K)) + 1
+    best = float(by_K.min())
+    reduction = (baseline - best) / baseline if baseline > 0 else 0.0
+
+    if n_null > 0:
+        min_reduction = null_reduction(
+            P=centers.shape[1], N=centers.shape[0], n_null=n_null, max_K=max_K,
+            n_restarts=max(1, n_restarts - 1), rng=rng,
+        )
+        if verbose:
+            print(f"  null reduction (chance level): {min_reduction:.4f}")
+
+    # Floor the threshold at zero. A negative `reduction` means the best subspace left the
+    # centres MORE correlated than they started -- which happens on isotropic data, where the
+    # residual-correlation curve rises with K -- and must always abstain, whatever a noisy null
+    # happened to return.
+    if reduction <= max(min_reduction, 0.0):
+        # No low-rank structure worth removing. Returning an empty basis makes the projection a
+        # no-op, which is the honest answer, rather than removing directions to chase noise.
+        return CenterSubspace(
+            basis=np.zeros((centers.shape[0], 0)), K=0, residual=baseline, baseline=baseline,
+            by_K=by_K, K_argmin=K_argmin, reduction=float(reduction), span=span,
+        )
+
+    # Elbow: the smallest K that gets within k_tol of the best achievable reduction.
+    threshold = best + k_tol * (baseline - best)
+    K_best = int(np.argmax(by_K <= threshold)) + 1
+
     return CenterSubspace(
         basis=span @ V_by_K[K_best - 1],
         K=K_best,
         residual=float(by_K[K_best - 1]),
         baseline=baseline,
         by_K=by_K,
+        K_argmin=K_argmin,
+        reduction=float(reduction),
         span=span,
     )

@@ -56,16 +56,24 @@ def make_correlated(P, N, rng, K, strength, D, radius, M):
     return synth.balls_with_centers(C, D=D, radius=radius, M=M, rng=rng), U
 
 
-def theory_capacity(Xs, kappa, n_t, seed, corrected, n_restarts=3):
-    """Capacity predicted with or without the center-subspace projection."""
+def theory_capacity(Xs, kappa, n_t, seed, corrected, n_restarts=3, n_null=3):
+    """Capacity predicted with or without the center-subspace projection.
+
+    n_null > 0 makes the "is there any structure here?" threshold a MEASURED chance level rather
+    than a fixed constant. It matters for the strength = 0 row: fitting a subspace to isotropic
+    centres removes about 10% of their correlation by chance, so a fixed 10% threshold sits right
+    on the noise and the routine projects a rank-8 subspace out of data that has none -- costing
+    capacity for nothing and making the corrected prediction undershoot.
+    """
     sub = None
     info = {}
     if corrected:
         res = find_center_subspace(
-            Xs, n_restarts=n_restarts, rng=np.random.default_rng(seed + 99)
+            Xs, n_restarts=n_restarts, n_null=n_null, rng=np.random.default_rng(seed + 99)
         )
-        sub = res.basis
-        info = {"K": res.K, "residual": res.residual, "baseline": res.baseline,
+        sub = res.basis if res.K > 0 else None
+        info = {"K": res.K, "K_argmin": res.K_argmin, "reduction": res.reduction,
+                "residual": res.residual, "baseline": res.baseline,
                 "by_K": res.by_K.tolist()}
     frames = build_frames(Xs, center_subspace=sub).frames
     out = [
@@ -99,7 +107,7 @@ def main():
     print(f"planted rank {args.K_planted}, balls D={args.D} R={args.radius} M={args.M}, "
           f"N={args.N}\n")
     print(f"{'strength':>9} {'|cos|':>7} {'partic':>7} {'uncorr':>8} {'corrected':>10} "
-          f"{'simulated':>10} {'K':>3}")
+          f"{'simulated':>10} {'K':>3} {'K_argmin':>9} {'reduc':>6}")
 
     for s in strengths:
         rng = np.random.default_rng(int(1000 * s) + 7)
@@ -127,7 +135,8 @@ def main():
             "subspace": info, "frac_sep": scan.frac_sep.tolist(),
         })
         print(f"{s:>9.2f} {diag['mean_abs_cos']:>7.3f} {diag['participation']:>7.1f} "
-              f"{a_un:>8.4f} {a_co:>10.4f} {emp:>10.4f} {info.get('K', 0):>3}")
+              f"{a_un:>8.4f} {a_co:>10.4f} {emp:>10.4f} {info.get('K', 0):>3} "
+              f"{info.get('K_argmin', 0):>9} {info.get('reduction', 0):>6.3f}")
 
     err_un = [abs(r["alpha_uncorrected"] - r["alpha_simulated"]) for r in rows
               if np.isfinite(r["alpha_simulated"])]
