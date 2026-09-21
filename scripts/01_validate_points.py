@@ -1,0 +1,251 @@
+"""VALIDATION 1 -- points: the closed form, the estimator, and a theory-free simulation.
+
+WHAT IS BEING ESTABLISHED
+-------------------------
+Three independent routes to the capacity of isolated point manifolds must agree:
+
+  (a) the closed form alpha_0(kappa) = 1 / [(1+kappa^2) Phi(kappa) + kappa phi(kappa)],
+  (b) the Monte Carlo estimator in `capacity.analyze_manifold`, run through the full public
+      path including frame construction,
+  (c) DIRECT SIMULATION: build P points in R^N, label them at random, and ask an exact linear
+      program whether a separating hyperplane exists. Sweep the load, find where separability
+      breaks, extrapolate to N -> infinity.
+
+Route (c) is the one that matters. (a) and (b) share the theory: if the theory has been
+transcribed wrongly they agree with each other and are both wrong. (c) never evaluates a replica
+formula, so agreement between (c) and (a) is evidence about the theory's application and not
+merely about the arithmetic.
+
+The expected answer is Cover's alpha_c = 2 at kappa = 0.
+
+WHAT TO LOOK FOR IN THE FIGURE
+------------------------------
+Left panel: the three routes on one axis, versus margin. The simulated points carry error bars
+from the binomial spread of the separable fraction; they should sit on the analytic curve.
+
+Right panel: the finite-size story. Separability versus load at several N. The transition
+sharpens as N grows -- that broadening is not noise, it is the finite-size smearing of a
+thermodynamic phase transition, and its width shrinks as 1/sqrt(N). The inset-style second
+trace shows the measured threshold against 1/N; a straight line extrapolating to 2 is the
+result. Reporting only one N would make a few percent of drift invisible.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+
+from mancap import analytic, build_frames, simulate, synth
+from mancap.capacity import analyze_manifold, combine
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def estimator_curve(kappas, n_t, seed=0):
+    """Route (b): the Monte Carlo estimator through the full public path.
+
+    Each margin gets INDEPENDENT Gaussian draws. That matters for interpreting the output:
+    reusing one draw set across margins makes every deviation the same fluctuation seen through
+    a slowly varying function, so the reported z-scores come out nearly identical and a reader
+    cannot tell a systematic bias from a single unlucky draw. Independent draws make the six
+    numbers six separate tests.
+    """
+    rng = np.random.default_rng(seed)
+    Xs = synth.points(P=40, N=150, rng=rng)
+    frames = build_frames(Xs).frames
+    out = []
+    for j, k in enumerate(kappas):
+        res = [
+            analyze_manifold(
+                f, kappa=float(k), n_t=n_t,
+                rng=np.random.default_rng(seed + 1000 * (j + 1) + i),
+            )
+            for i, f in enumerate(frames[:4])
+        ]
+        rel = float(np.mean([r.f_sem / r.f_mean for r in res]))
+        out.append((combine(res), rel))
+    return np.array([o[0] for o in out]), np.array([o[1] for o in out])
+
+
+def simulated_curve(kappas, N, alphas, n_seeds, seed=0):
+    """Route (c) at nonzero margin: scan the load once, read every margin off the same scan.
+
+    Because kappa* is the largest achievable margin, the manifolds are separable at margin kappa
+    exactly when kappa* >= kappa. So one sweep of kappa* over the load yields the whole
+    alpha(kappa) curve -- no retraining, no separate scan per margin.
+
+    Two details that are easy to get wrong:
+
+      * At kappa = 0 the test must be kappa* > 0, STRICTLY. kappa* >= 0 holds by definition, so a
+        non-strict test reports every load as separable and the crossing is never found.
+      * The load grid must reach well below the smallest threshold being measured. Capacity at
+        kappa = 1 is about 0.52, so a grid starting at alpha = 1.3 begins already past the
+        transition and again finds no crossing. The grid here therefore starts near 0.2.
+    """
+    rng = np.random.default_rng(seed)
+    per_alpha = []
+    for alpha in alphas:
+        P = max(1, int(round(alpha * N)))
+        margins = []
+        for _ in range(n_seeds):
+            Xs = synth.points(P, N, rng)
+            labels = rng.choice([-1.0, 1.0], size=len(Xs))
+            margins.append(simulate.max_margin(simulate.labelled_points(Xs, labels)).kappa_star)
+        per_alpha.append(np.array(margins))
+
+    out = []
+    for k in kappas:
+        if k <= 0:
+            frac = np.array([float(np.mean(m > 1e-9)) for m in per_alpha])
+        else:
+            frac = np.array([float(np.mean(m >= k)) for m in per_alpha])
+        out.append(simulate.crossing(np.asarray(alphas), frac, 0.5))
+    return np.array(out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n-t", type=int, default=20000, help="Gaussian draws for the estimator")
+    ap.add_argument("--n-seeds", type=int, default=60, help="label draws per load")
+    ap.add_argument("--Ns", type=int, nargs="+", default=[25, 50, 100, 200])
+    ap.add_argument("--margin-N", type=int, default=100,
+                    help="ambient dim for the nonzero-margin curve; kept below the largest N "
+                         "because that scan needs max_margin at every load, not just an LP")
+    ap.add_argument("--quick", action="store_true", help="small settings for a smoke run")
+    args = ap.parse_args()
+    if args.quick:
+        args.n_t, args.n_seeds, args.Ns, args.margin_N = 4000, 25, [25, 50], 50
+
+    t0 = time.time()
+    kappas = np.array([0.0, 0.1, 0.25, 0.5, 0.75, 1.0])
+
+    print("ROUTE (a) closed form and (b) Monte Carlo estimator")
+    theory = analytic.point_capacity(kappas)
+    est, rel = estimator_curve(kappas, args.n_t)
+    print(f"  {'kappa':>7} {'theory':>10} {'estimator':>10} {'rel sem':>9} {'z':>7}")
+    for k, th, es, rl in zip(kappas, theory, est, rel):
+        z = (es - th) / (th * rl) if rl > 0 else np.nan
+        print(f"  {k:>7.2f} {th:>10.4f} {es:>10.4f} {rl:>9.4f} {z:>+7.2f}")
+    max_z = float(np.max(np.abs((est - theory) / (theory * rel))))
+    print(f"  worst deviation: {max_z:.2f} standard errors")
+
+    print("\nROUTE (c) direct simulation, finite-size scan at kappa = 0")
+    alphas = np.arange(1.3, 2.9, 0.1)
+    scans, thr = [], []
+    for N in args.Ns:
+        s = simulate.threshold_scan(
+            lambda P, NN, r: synth.points(P, NN, r), N, alphas, n_seeds=args.n_seeds,
+            rng=np.random.default_rng(1000 + N), compute_margin=False,
+        )
+        a50 = simulate.crossing(s.alphas, s.frac_sep, 0.5)
+        scans.append(s)
+        thr.append(a50)
+        print(f"  N={N:4d}  alpha_c = {a50:.4f}")
+    ex = simulate.extrapolate_threshold(args.Ns, thr)
+    print(f"  extrapolated N -> inf: {ex['intercept']:.4f}  "
+          f"(slope {ex['slope']:+.2f}, rms resid {ex['resid']:.4f})   THEORY 2.0000")
+
+    print("\nROUTE (c) at nonzero margin")
+    N_m = args.margin_N
+    # A separate, wider grid: thresholds at large kappa fall well below the kappa = 0 transition
+    # (alpha_c(1.0) ~ 0.52), so the kappa = 0 grid above would start past them entirely.
+    margin_alphas = np.concatenate([np.arange(0.2, 1.0, 0.1), np.arange(1.0, 2.9, 0.15)])
+    sim_k = simulated_curve(kappas, N_m, margin_alphas, max(20, args.n_seeds // 2))
+    print(f"  {'kappa':>7} {'theory':>10} {'simulated':>10}")
+    for k, th, sm in zip(kappas, theory, sim_k):
+        print(f"  {k:>7.2f} {th:>10.4f} {sm:>10.4f}")
+
+    out = {
+        "kappas": kappas.tolist(),
+        "theory": theory.tolist(),
+        "estimator": est.tolist(),
+        "estimator_rel_sem": rel.tolist(),
+        "worst_z": max_z,
+        "Ns": list(args.Ns),
+        "thresholds": thr,
+        "extrapolation": ex,
+        "alphas": alphas.tolist(),
+        "frac_sep": [s.frac_sep.tolist() for s in scans],
+        "simulated_kappa_curve": sim_k.tolist(),
+        "margin_alphas": margin_alphas.tolist(),
+        "simulation_N": int(N_m),
+        "settings": vars(args),
+        "seconds": time.time() - t0,
+    }
+    (ROOT / "data").mkdir(exist_ok=True)
+    (ROOT / "data" / "validate_points.json").write_text(json.dumps(out, indent=2))
+    print(f"\nwrote data/validate_points.json  ({out['seconds']:.1f}s)")
+
+    _figure(out)
+
+
+def _figure(out):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    kap = np.array(out["kappas"])
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
+
+    # --- capacity vs margin, three routes -----------------------------------------------------
+    kk = np.linspace(-0.2, 1.15, 300)
+    ax[0].plot(kk, analytic.point_capacity(kk), "-", lw=2, color="0.25",
+               label="closed form $\\alpha_0(\\kappa)$")
+    est = np.array(out["estimator"])
+    rel = np.array(out["estimator_rel_sem"])
+    ax[0].errorbar(kap, est, yerr=est * rel * 1.96, fmt="o", ms=6, capsize=3,
+                   color="#1f77b4", label="replica estimator (95% MC)")
+    sim = np.array(out["simulated_kappa_curve"])
+    ax[0].plot(kap, sim, "s", ms=7, mfc="none", mew=2, color="#d62728",
+               label=f"direct simulation, N={out['simulation_N']}")
+    ax[0].axhline(2.0, ls=":", color="0.6", lw=1)
+    ax[0].set_xlabel("margin $\\kappa$")
+    ax[0].set_ylabel("capacity $\\alpha$")
+    ax[0].set_title("Three independent routes agree")
+    ax[0].legend(frameon=False, fontsize=8)
+
+    # --- finite size: separability curves -----------------------------------------------------
+    alphas = np.array(out["alphas"])
+    cmap = plt.get_cmap("viridis")
+    for i, (N, frac) in enumerate(zip(out["Ns"], out["frac_sep"])):
+        c = cmap(i / max(len(out["Ns"]) - 1, 1))
+        ax[1].plot(alphas, frac, "o-", ms=3.5, color=c, label=f"N={N}")
+    ax[1].axvline(2.0, ls="--", color="#d62728", lw=1.5, label="theory $\\alpha_c=2$")
+    ax[1].axhline(0.5, ls=":", color="0.6", lw=1)
+    ax[1].set_xlabel("load $\\alpha = P/N$")
+    ax[1].set_ylabel("fraction separable")
+    ax[1].set_title("Transition sharpens with N\n(finite-size smearing, not noise)", fontsize=10)
+    ax[1].legend(frameon=False, fontsize=8)
+
+    # --- finite size: extrapolation -----------------------------------------------------------
+    Ns = np.array(out["Ns"], dtype=float)
+    thr = np.array(out["thresholds"])
+    x = 1.0 / Ns
+    ax[2].plot(x, thr, "o", ms=7, color="#1f77b4")
+    ex = out["extrapolation"]
+    xs = np.linspace(0, x.max() * 1.05, 50)
+    ax[2].plot(xs, ex["intercept"] + ex["slope"] * xs, "-", color="0.35", lw=1.5,
+               label=f"fit: {ex['intercept']:.3f} {ex['slope']:+.2f}/N")
+    ax[2].axhline(2.0, ls="--", color="#d62728", lw=1.5, label="theory $\\alpha_c=2$")
+    ax[2].plot([0], [ex["intercept"]], "*", ms=16, color="#1f77b4", zorder=5)
+    ax[2].set_xlabel("$1/N$")
+    ax[2].set_ylabel("measured $\\alpha_c$")
+    ax[2].set_title("Extrapolation to the thermodynamic limit", fontsize=10)
+    ax[2].legend(frameon=False, fontsize=8)
+
+    for a in ax:
+        a.spines[["top", "right"]].set_visible(False)
+    fig.suptitle("Validation 1: point manifolds reproduce Cover's bound by three routes",
+                 fontsize=12)
+    fig.tight_layout()
+    (ROOT / "figures").mkdir(exist_ok=True)
+    p = ROOT / "figures" / "01_validate_points.png"
+    fig.savefig(p, dpi=150, bbox_inches="tight")
+    print(f"wrote {p.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()
