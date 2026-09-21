@@ -104,6 +104,7 @@ def build_frames(
     subtract_global_mean: bool = True,
     reduce_dim: bool | str = True,
     rank_tol: float | None = None,
+    center_subspace: np.ndarray | None = None,
 ) -> FrameSet:
     """Build the (D+1)-frames for a list of manifolds.
 
@@ -121,6 +122,12 @@ def build_frames(
             rows, which biases D_M far more and is only useful for testing invariances.
         rank_tol: Absolute singular-value threshold for the rank. Default follows numpy's
             matrix_rank convention, max(shape) * eps * largest singular value.
+        center_subspace: Optional (N, K) orthonormal basis, from
+            `centers.find_center_subspace`, projected out of every manifold before the frame is
+            built. This is the correlated-centers correction: it removes the directions carrying
+            shared structure between category centers, which the theory assumes absent. Leaving
+            it None is correct for synthetic data with random centers and WRONG for real
+            representations; `center_correlation` below says which situation you are in.
 
     Returns:
         FrameSet.
@@ -137,8 +144,18 @@ def build_frames(
     frames: list[np.ndarray] = []
     center_norms, raw_radii, ranks = [], [], []
 
+    if center_subspace is not None:
+        center_subspace = np.asarray(center_subspace, dtype=np.float64)
+        if center_subspace.shape[0] != Xs[0].shape[0]:
+            raise ValueError("center_subspace must have N rows, matching the ambient dimension")
+
     for X in Xs:
         X0 = X - origin
+        if center_subspace is not None:
+            # Remove the shared center structure. Applied to the whole manifold, not just its
+            # center, so that the frame is built inside the null space rather than having the
+            # subspace subtracted after the fact.
+            X0 = X0 - center_subspace @ (center_subspace.T @ X0)
         c = X0.mean(axis=1, keepdims=True)
         cn = float(np.linalg.norm(c))
         # Compare against the data's own scale rather than against exact zero: with a single

@@ -70,40 +70,37 @@ def estimator_curve(kappas, n_t, seed=0):
     return np.array([o[0] for o in out]), np.array([o[1] for o in out])
 
 
-def simulated_curve(kappas, N, alphas, n_seeds, seed=0):
-    """Route (c) at nonzero margin: scan the load once, read every margin off the same scan.
+def margin_collapse(Ns, alphas, n_seeds, seed=0):
+    """Route (c) at nonzero margin, done as a SCALING COLLAPSE.
 
-    Because kappa* is the largest achievable margin, the manifolds are separable at margin kappa
-    exactly when kappa* >= kappa. So one sweep of kappa* over the load yields the whole
-    alpha(kappa) curve -- no retraining, no separate scan per margin.
+    A simulation measures the margin geometrically: with unit-norm readout and unit-norm points,
+    kappa_measured = min_i y_i <w, x_i>, which shrinks as ~1/sqrt(P). The theory's kappa is the
+    standardised overlap, kappa_theory = sqrt(N) * kappa_measured (see
+    `analytic.standardise_margin`). Comparing the two without that factor disagrees by orders of
+    magnitude, and the disagreement looks like a capacity error rather than a units error.
 
-    Two details that are easy to get wrong:
-
-      * At kappa = 0 the test must be kappa* > 0, STRICTLY. kappa* >= 0 holds by definition, so a
-        non-strict test reports every load as separable and the crossing is never found.
-      * The load grid must reach well below the smallest threshold being measured. Capacity at
-        kappa = 1 is about 0.52, so a grid starting at alpha = 1.3 begins already past the
-        transition and again finds no crossing. The grid here therefore starts near 0.2.
+    Rescaling turns the comparison into something much stronger than a single number: measure
+    kappa* across loads at several N, multiply by sqrt(N), and all the curves must fall on top
+    of each other AND on the inverse of alpha_0. A collapse across N cannot happen by accident,
+    and it tests the margin convention -- precisely the sort of misapplied theory that agreement
+    between solvers can never detect.
     """
-    rng = np.random.default_rng(seed)
-    per_alpha = []
-    for alpha in alphas:
-        P = max(1, int(round(alpha * N)))
-        margins = []
-        for _ in range(n_seeds):
-            Xs = synth.points(P, N, rng)
-            labels = rng.choice([-1.0, 1.0], size=len(Xs))
-            margins.append(simulate.max_margin(simulate.labelled_points(Xs, labels)).kappa_star)
-        per_alpha.append(np.array(margins))
-
-    out = []
-    for k in kappas:
-        if k <= 0:
-            frac = np.array([float(np.mean(m > 1e-9)) for m in per_alpha])
-        else:
-            frac = np.array([float(np.mean(m >= k)) for m in per_alpha])
-        out.append(simulate.crossing(np.asarray(alphas), frac, 0.5))
-    return np.array(out)
+    out = {}
+    for N in Ns:
+        rng = np.random.default_rng(seed + N)
+        mean_k, sd_k = [], []
+        for alpha in alphas:
+            P = max(1, int(round(alpha * N)))
+            ks = []
+            for _ in range(n_seeds):
+                Xs = synth.points(P, N, rng)
+                labels = rng.choice([-1.0, 1.0], size=len(Xs))
+                ks.append(simulate.max_margin(simulate.labelled_points(Xs, labels)).kappa_star)
+            ks = analytic.standardise_margin(np.array(ks), N)
+            mean_k.append(float(np.mean(ks)))
+            sd_k.append(float(np.std(ks)))
+        out[N] = {"mean": mean_k, "sd": sd_k}
+    return out
 
 
 def main():
@@ -148,15 +145,21 @@ def main():
     print(f"  extrapolated N -> inf: {ex['intercept']:.4f}  "
           f"(slope {ex['slope']:+.2f}, rms resid {ex['resid']:.4f})   THEORY 2.0000")
 
-    print("\nROUTE (c) at nonzero margin")
-    N_m = args.margin_N
-    # A separate, wider grid: thresholds at large kappa fall well below the kappa = 0 transition
-    # (alpha_c(1.0) ~ 0.52), so the kappa = 0 grid above would start past them entirely.
-    margin_alphas = np.concatenate([np.arange(0.2, 1.0, 0.1), np.arange(1.0, 2.9, 0.15)])
-    sim_k = simulated_curve(kappas, N_m, margin_alphas, max(20, args.n_seeds // 2))
-    print(f"  {'kappa':>7} {'theory':>10} {'simulated':>10}")
-    for k, th, sm in zip(kappas, theory, sim_k):
-        print(f"  {k:>7.2f} {th:>10.4f} {sm:>10.4f}")
+    print("\nROUTE (c) at nonzero margin: scaling collapse of sqrt(N) * kappa*")
+    margin_alphas = np.array([0.3, 0.5, 0.8, 1.0, 1.3, 1.6, 1.9])
+    margin_Ns = [N for N in args.Ns if N >= 50] or args.Ns
+    coll = margin_collapse(margin_Ns, margin_alphas, max(12, args.n_seeds // 4))
+    kappa_theory = [analytic.margin_for_capacity(a) for a in margin_alphas]
+    print(f"  {'alpha':>7} {'kappa_th':>9} |" + "".join(f"{f'N={N}':>10}" for N in margin_Ns))
+    for j, a in enumerate(margin_alphas):
+        row = f"  {a:>7.2f} {kappa_theory[j]:>9.4f} |"
+        row += "".join(f"{coll[N]['mean'][j]:>10.4f}" for N in margin_Ns)
+        print(row)
+    dev = max(
+        abs(coll[N]["mean"][j] - kappa_theory[j])
+        for N in margin_Ns for j in range(len(margin_alphas))
+    )
+    print(f"  worst absolute deviation from the theoretical margin: {dev:.4f}")
 
     out = {
         "kappas": kappas.tolist(),
@@ -169,9 +172,10 @@ def main():
         "extrapolation": ex,
         "alphas": alphas.tolist(),
         "frac_sep": [s.frac_sep.tolist() for s in scans],
-        "simulated_kappa_curve": sim_k.tolist(),
+        "margin_collapse": {str(N): coll[N] for N in margin_Ns},
         "margin_alphas": margin_alphas.tolist(),
-        "simulation_N": int(N_m),
+        "margin_kappa_theory": kappa_theory,
+        "margin_worst_deviation": float(dev),
         "settings": vars(args),
         "seconds": time.time() - t0,
     }
@@ -188,7 +192,7 @@ def _figure(out):
     import matplotlib.pyplot as plt
 
     kap = np.array(out["kappas"])
-    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
+    fig, ax = plt.subplots(1, 4, figsize=(19, 4.4))
 
     # --- capacity vs margin, three routes -----------------------------------------------------
     kk = np.linspace(-0.2, 1.15, 300)
@@ -198,13 +202,10 @@ def _figure(out):
     rel = np.array(out["estimator_rel_sem"])
     ax[0].errorbar(kap, est, yerr=est * rel * 1.96, fmt="o", ms=6, capsize=3,
                    color="#1f77b4", label="replica estimator (95% MC)")
-    sim = np.array(out["simulated_kappa_curve"])
-    ax[0].plot(kap, sim, "s", ms=7, mfc="none", mew=2, color="#d62728",
-               label=f"direct simulation, N={out['simulation_N']}")
     ax[0].axhline(2.0, ls=":", color="0.6", lw=1)
     ax[0].set_xlabel("margin $\\kappa$")
     ax[0].set_ylabel("capacity $\\alpha$")
-    ax[0].set_title("Three independent routes agree")
+    ax[0].set_title("Closed form vs Monte Carlo estimator")
     ax[0].legend(frameon=False, fontsize=8)
 
     # --- finite size: separability curves -----------------------------------------------------
@@ -236,10 +237,26 @@ def _figure(out):
     ax[2].set_title("Extrapolation to the thermodynamic limit", fontsize=10)
     ax[2].legend(frameon=False, fontsize=8)
 
+    # --- margin scaling collapse ---------------------------------------------------------------
+    ma = np.array(out["margin_alphas"])
+    kt = np.array(out["margin_kappa_theory"])
+    aa = np.linspace(ma.min() * 0.9, ma.max() * 1.05, 120)
+    ax[3].plot(aa, [analytic.margin_for_capacity(a) for a in aa], "-", lw=2, color="0.25",
+               label="theory: $\\alpha_0^{-1}(\\alpha)$")
+    for i, (N, d) in enumerate(sorted(out["margin_collapse"].items(), key=lambda kv: int(kv[0]))):
+        c = cmap(i / max(len(out["margin_collapse"]) - 1, 1))
+        ax[3].errorbar(ma, d["mean"], yerr=d["sd"], fmt="o", ms=5, capsize=2, color=c,
+                       label=f"N={N}")
+    ax[3].set_xlabel("load $\\alpha = P/N$")
+    ax[3].set_ylabel("$\\sqrt{N}\\,\\kappa^*$ (standardised margin)")
+    ax[3].set_title("Margin units: the curves collapse across N\n"
+                    "(without $\\sqrt{N}$ they disagree by orders of magnitude)", fontsize=10)
+    ax[3].legend(frameon=False, fontsize=8)
+
     for a in ax:
         a.spines[["top", "right"]].set_visible(False)
-    fig.suptitle("Validation 1: point manifolds reproduce Cover's bound by three routes",
-                 fontsize=12)
+    fig.suptitle("Validation 1: point manifolds reproduce Cover's bound, and the margin "
+                 "convention is verified by scaling collapse", fontsize=12)
     fig.tight_layout()
     (ROOT / "figures").mkdir(exist_ok=True)
     p = ROOT / "figures" / "01_validate_points.png"

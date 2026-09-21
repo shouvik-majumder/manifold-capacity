@@ -32,7 +32,7 @@ is correct but hard to deploy and slow:
 | Speed (CPU, single thread) | — | **5–12× faster**, same numbers to 1e-12 |
 | Dependencies | `autograd`, `cvxopt`, `pymanopt` (pre-rename API) | numpy + scipy |
 | Frame reduction | thin QR to M rows | SVD to the manifold's true **rank** (see below) |
-| Center correlation | Stiefel optimization, 20000 iterations per candidate rank | not yet implemented |
+| Center correlation | `pymanopt` Stiefel optimization; gradient via a (P, P, N, K) tensor | self-contained Riemannian descent; closed-form gradient at O(P²K) |
 
 The inner problem is: given a manifold's frame S and a Gaussian vector T, find the nearest V
 that keeps every manifold point on the correct side of the margin,
@@ -67,6 +67,8 @@ package is organised around independent checks rather than around the estimator.
 | `inner.solve_ball` cone projection | error on a manifold that is not a point | closed form, no iteration |
 | Two routes to F (objective, and via the anchor) | **wrong anchors** behind a right capacity | `consistency` < 1e-10 |
 | Reference implementation, draw by draw | any deviation from the published method | **1e-12** on α, D = 1…12 |
+| Gradient of the center-correlation cost vs finite differences | a wrong subspace that still looks plausible | < 1e-6 |
+| Stiefel optimizer on a problem with a known optimum | optimizer bug | recovers top eigenvectors exactly |
 | **Direct simulation** | **a misapplied theory that all the above share** | see below |
 
 The last row is the one that matters. Everything else validates the *implementation* of the
@@ -81,14 +83,35 @@ hyperplane, using the identity
 so one geometric computation per dataset gives the margin exactly — no training, no learning
 rate, no stopping criterion — and a single sweep over the load yields the whole α(κ) curve.
 
-Measured: **α_c = 2.03 → 2.01 → 2.01 → 2.02** at N = 25, 50, 100, 200, extrapolating in 1/N to
-**2.03** against Cover's 2. The transition visibly sharpens with N; that broadening is
+Measured: **α_c = 2.047 → 1.993 → 2.000 → 1.992** at N = 25, 50, 100, 200, extrapolating in 1/N
+to **1.98** against Cover's 2. The transition visibly sharpens with N; that broadening is
 finite-size smearing of a phase transition, not noise, which is why a single N would not be
-enough to detect a few percent of error. For manifolds *with extent*, segments (whose convex
-hull is exact at M = 2, so there is no sampling bias to confound the comparison) agree with
-theory to a few percent across half-lengths 0.1 to 1.0.
+enough to detect a few percent of error.
 
-## Two findings that matter for applying this to real data
+For manifolds **with extent**, segments are the right test — their convex hull is exact at
+M = 2, so there is no sampling bias to confound the comparison:
+
+| segment half-length | 0.10 | 0.30 | 0.60 | 1.00 |
+|---|---|---|---|---|
+| replica theory | 1.763 | 1.449 | 1.177 | 0.994 |
+| direct simulation | 1.758 | 1.475 | 1.177 | 1.000 |
+
+## Three findings that matter for applying this to real data
+
+**0. The theory's margin κ is a *standardised* overlap, not a geometric one.** A simulation
+measures `min_i y_i ⟨w, x_i⟩` with unit-norm readout and points — a quantity that shrinks as
+1/√P. The theory's Gaussian field is its standardised version, so
+
+```
+κ_theory = √N · κ_measured
+```
+
+Without that factor the theory and a simulation disagree by orders of magnitude at nonzero
+margin, and **the disagreement looks like a capacity error rather than a units error**. Verified
+by scaling collapse rather than by derivation: rescaling κ* by √N makes the curves at
+N = 50, 100, 200, 400 fall on top of each other and on α₀⁻¹, from α = 0.3 (κ = 1.53) to α = 1.9
+(κ = 0.03). This is exactly the class of error that agreement between solvers can never catch,
+and it is the reason the direct simulation exists.
 
 **1. Finite sampling inflates capacity, severely, and worse in high dimensions.** The inner
 problem sees a manifold only through the convex hull of its sampled points, so a ball sampled
@@ -97,11 +120,13 @@ with M points is really an inscribed polytope — smaller, easier to separate. T
 
 | | M = 10 | M = 30 | M = 100 | M = 300 | M = 1000 |
 |---|---|---|---|---|---|
-| D = 2 | ~0% | ~0% | ~0% | ~0% | ~0% |
-| D = 5 | +23% | +20% | +4% | +4% | +7% |
-| D = 20 | +155% | +137% | +91% | +79% | **+70%** |
+| D = 2 | +5% | +1% | +3% | +5% | +2% |
+| D = 5 | +32% | +19% | +9% | −1% | +3% |
+| D = 20 | +163% | +125% | +99% | +80% | **+64%** |
 
-At D = 20, a thousand samples per manifold still overestimates capacity by 70%. A concept
+At D = 20, a thousand samples per manifold still overestimates capacity by 64%, and the anchor
+dimension is recovered as 10.0 rather than 20. (The D = 2 row is Monte Carlo noise around zero,
+not bias: ten points already cover a circle's hull.) A concept
 manifold in a language model's residual stream is high dimensional, and a realistic dataset
 supplies tens to hundreds of prompts per concept. **Capacity numbers from real data are not
 comparable to theory unless the sample count is swept**, and the honest deliverable is the trend
@@ -117,6 +142,30 @@ is worst when M is small relative to the true dimension, i.e. exactly the regime
 in. `reduce_dim="qr"` reproduces the reference's behaviour for comparison against published
 numbers.
 
+**3. The correlated-centers correction works, and it is not optional.** The theory assumes the P
+category centers are in general position; real representations concentrate them in a few
+directions. `mancap.centers` reimplements the correction — find the low-rank subspace carrying
+the shared structure, project it out — with a closed-form gradient (O(P²K) instead of a
+(P, P, N, K) tensor) and a self-contained Stiefel optimizer, so `pymanopt` is not needed.
+
+Whether the correction makes the theory *predict reality* is a separate question from whether
+the optimizer finds the subspace, and only simulation can answer it. Planting a rank-3 shared
+component in the centers and sweeping its strength:
+
+| planted strength | 0.00 | 0.40 | 0.70 | 0.85 | 0.95 |
+|---|---|---|---|---|---|
+| mean \|cos\| between centers | 0.10 | 0.12 | 0.25 | 0.36 | 0.46 |
+| theory, uncorrected | 1.118 | 1.117 | 1.117 | 1.117 | 1.110 |
+| theory, corrected | 1.064 | 1.050 | 0.867 | 0.749 | 0.519 |
+| **direct simulation** | **1.150** | **1.050** | **0.956** | **0.753** | **0.560** |
+
+The uncorrected prediction is **flat** — it cannot see the correlation at all — while the true
+capacity falls by half. Mean absolute error against simulation: **0.235 uncorrected → 0.044
+corrected**. Note the honest cost: at zero correlation the correction slightly over-projects
+(1.064 vs 1.150 true), so it is not free when there is nothing to correct. Check
+`CenterSubspace.by_K`; a flat curve means there is no low-rank structure and the projection is
+removing signal.
+
 ## Layout
 
 ```
@@ -125,14 +174,16 @@ mancap/
   capacity.py   α_M, R_M, D_M from the inner solutions; how to combine manifolds
   frames.py     raw activations → (D+1)-frames; center-correlation diagnostics
   synth.py      synthetic manifolds with known geometry: points, balls, segments, rings, ellipsoids
-  analytic.py   closed forms the pipeline must reproduce
+  centers.py    the correlated-centers correction: cost, closed-form gradient, Stiefel optimizer
+  analytic.py   closed forms, and the margin unit convention
   simulate.py   direct simulation of the separability threshold
 scripts/
   00_crosscheck_reference.py       draw-by-draw comparison against the published code
   00b_benchmark_reference.py       timing comparison
   01_validate_points.py            closed form vs estimator vs direct simulation
   02_validate_balls_and_segments.py  exact balls, sampling bias, and a theory-free threshold
-tests/                             62 tests
+  03_validate_correlated_centers.py  does the correction make theory match simulation?
+tests/                             78 tests
 ```
 
 ## Setup
@@ -141,7 +192,7 @@ tests/                             62 tests
 conda create -n mancap -c conda-forge python=3.12 numpy scipy matplotlib pytest scikit-learn tqdm -y
 conda activate mancap
 pip install -e D:\dev\manifold-capacity --no-deps
-pytest                              # 62 tests, ~1 min
+pytest                              # 78 tests, ~2 min
 ```
 
 Run the validations (each writes JSON to `data/` and a figure to `figures/`):
@@ -154,19 +205,20 @@ python scripts/01_validate_points.py
 python scripts/02_validate_balls_and_segments.py
 ```
 
+```bash
+python scripts/03_validate_correlated_centers.py
+```
+
 Add `--quick` to either for a fast smoke run. The reference cross-check needs its own
 environment; see the docstring of `scripts/00_crosscheck_reference.py`.
 
 ## What is not done yet
 
-- **Correlated centers.** The theory assumes the P manifold centers are in general position.
-  Real representations badly violate this — a few directions carry most of the between-category
-  variance — and the reference corrects for it with a Stiefel-manifold optimization that finds
-  and projects out the low-rank center structure. Until that is implemented and validated,
-  capacity from real data with correlated centers is biased. `frames.center_correlation`
-  measures the size of the problem (mean |cos| between centers, participation ratio, components
-  for 95% of center variance) so it is visible rather than assumed away. Synthetic validation
-  runs in the uncorrelated regime by construction, where no correction is needed.
+- **Correlated centers at realistic scale.** The correction is implemented and validated against
+  simulation (finding 3 above), but only at P ~ 60 manifolds in N ~ 120 dimensions. Real data
+  will have far larger N and a center-correlation structure that is not a clean planted subspace.
+  `frames.center_correlation` reports the size of the problem and `CenterSubspace.by_K` shows
+  whether low-rank structure exists at all; look at both before trusting a corrected number.
 - **Batched GPU solver.** The dual formulation is designed for it — only `SᵀT` depends on the
   draw — but the current solver is a per-draw active set in numpy.
 - **Application to language model activations.** Deliberately last. Note the caveat above: the

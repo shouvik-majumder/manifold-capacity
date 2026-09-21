@@ -48,20 +48,23 @@ inner      The inner minimization (active set on the dual, SLSQP, closed-form ba
 capacity   alpha_M, R_M, D_M from the inner solutions; how to combine manifolds.
 frames     Raw activations -> the (D+1)-frames the theory expects; center-correlation diagnostics.
 synth      Synthetic manifolds with known geometry: points, balls, segments, rings, ellipsoids.
+centers    The correlated-centers correction, which real representations need.
 analytic   Closed forms the pipeline must reproduce.
 simulate   Direct simulation of the separability threshold.
 """
 from __future__ import annotations
 
-from . import analytic, capacity, frames, inner, synth
+from . import analytic, capacity, centers, frames, inner, simulate, synth
 from .capacity import ManifoldResult, analyze_manifold, combine
 from .frames import FrameSet, build_frames, center_correlation
 
 __all__ = [
     "analytic",
     "capacity",
+    "centers",
     "frames",
     "inner",
+    "simulate",
     "synth",
     "ManifoldResult",
     "analyze_manifold",

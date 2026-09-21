@@ -52,6 +52,49 @@ def point_capacity_quad(kappa: float) -> float:
     return 1.0 / val if val > 0 else np.inf
 
 
+def margin_for_capacity(alpha: float) -> float:
+    """Invert alpha_0: the margin at which point capacity equals `alpha`.
+
+    Needed to compare the theory against a simulation, because a simulation naturally measures
+    "what margin is achievable at this load" while the theory states "what load is separable at
+    this margin". Monotonicity of alpha_0 makes the inverse well defined.
+    """
+    from scipy.optimize import brentq
+
+    if alpha <= 0:
+        raise ValueError("capacity must be positive")
+    return float(brentq(lambda k: point_capacity(k) - alpha, -6.0, 30.0, xtol=1e-13))
+
+
+# ----------------------------------------------------------------------------------------------
+# Units
+# ----------------------------------------------------------------------------------------------
+
+def standardise_margin(kappa_measured: float | np.ndarray, N: int) -> float | np.ndarray:
+    """Convert a measured geometric margin into the theory's units: kappa_theory = sqrt(N) * kappa.
+
+    THIS CONVERSION IS EASY TO MISS AND SILENTLY WRONG WITHOUT IT.
+
+    A simulation measures the margin geometrically: with a unit-norm readout w and unit-norm
+    points x, the achieved margin is min_i y_i <w, x_i>, a number that shrinks as ~1/sqrt(P).
+    The replica theory's kappa is not that number. Its Gaussian field T is the STANDARDISED
+    overlap: for random unit w, the overlap <w, x> has standard deviation 1/sqrt(N), so
+    T = sqrt(N) <w, x> and therefore
+
+        kappa_theory = sqrt(N) * kappa_measured.
+
+    Verified by scaling collapse rather than by derivation alone: measuring kappa* across loads
+    at N = 50, 100, 200, 400 and rescaling by sqrt(N) makes the four curves fall on top of each
+    other and on the inverse of alpha_0, from alpha = 0.3 (kappa = 1.53) to alpha = 1.9
+    (kappa = 0.03). Without the factor, a comparison of theory to simulation at nonzero margin
+    disagrees by orders of magnitude -- and the disagreement looks like a capacity error rather
+    than a units error, which is what makes it dangerous.
+
+    See `scripts/01_validate_points.py` for the collapse figure.
+    """
+    return np.sqrt(N) * np.asarray(kappa_measured)
+
+
 def low_rank_approx(kappa: float, radius: float, dimension: float) -> float:
     """The standard small-radius approximation alpha_M ~ alpha_0 of an effective margin.
 

@@ -32,6 +32,68 @@ def _random_centers(P: int, N: int, rng: np.random.Generator, norm: float = 1.0)
     return C * norm
 
 
+def correlated_centers(
+    P: int,
+    N: int,
+    rng: np.random.Generator,
+    K: int = 3,
+    strength: float = 0.8,
+    norm: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """P centers with a planted K-dimensional shared component. Shape (N, P), plus its basis.
+
+    Built as  center = strength * (shared K-dim component) + sqrt(1 - strength^2) * (isotropic),
+    then renormalised. This is the pathology real representations exhibit: a few directions carry
+    most of the between-category variance, so the centers are far from the general position the
+    theory assumes.
+
+    Returning the planted basis matters for validation: `centers.find_center_subspace` should
+    recover this subspace, and recovering it is a much sharper test than merely observing that
+    the residual correlation went down.
+
+    Args:
+        K: Dimension of the planted shared subspace.
+        strength: 0 gives isotropic centers, 1 puts them entirely inside the subspace. Around
+            0.8 is a realistic level of shared structure.
+
+    Returns:
+        (centers (N, P), planted basis (N, K) orthonormal).
+    """
+    if not 0.0 <= strength <= 1.0:
+        raise ValueError("strength must lie in [0, 1]")
+    U = _random_subspace(N, K, rng)
+    shared = U @ rng.standard_normal((K, P))
+    shared /= np.linalg.norm(shared, axis=0, keepdims=True)
+    iso = rng.standard_normal((N, P))
+    iso /= np.linalg.norm(iso, axis=0, keepdims=True)
+    C = strength * shared + np.sqrt(1.0 - strength ** 2) * iso
+    C /= np.linalg.norm(C, axis=0, keepdims=True)
+    return C * norm, U
+
+
+def balls_with_centers(
+    centers: np.ndarray,
+    D: int,
+    radius: float,
+    M: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Balls placed at supplied centers, so center geometry and manifold geometry are decoupled.
+
+    Used with `correlated_centers` to build data where the theory's general-position assumption
+    is violated in a controlled, known way while every manifold's shape stays identical.
+    """
+    N, P = centers.shape
+    scale = float(np.mean(np.linalg.norm(centers, axis=0)))
+    out = []
+    for p in range(P):
+        U = _random_subspace(N, D, rng)
+        S = rng.standard_normal((D, M))
+        S /= np.linalg.norm(S, axis=0, keepdims=True)
+        out.append(centers[:, [p]] + scale * radius * (U @ S))
+    return out
+
+
 def _random_subspace(N: int, D: int, rng: np.random.Generator) -> np.ndarray:
     """An orthonormal basis for a random D-dimensional subspace of R^N. Shape (N, D)."""
     A = rng.standard_normal((N, D))
