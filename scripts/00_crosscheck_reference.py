@@ -14,8 +14,8 @@ active-set solver, return exactly what the published cvxopt implementation retur
 per-manifold quantities alpha_M, R_M and D_M. It does NOT establish that either is a correct
 application of the theory -- both could share a transcription error. That is what
 `01_validate_points.py` and the direct-simulation validations are for. It also does not cover
-the correlated-centers correction (`fun_FA` in the reference), which mancap does not implement
-yet.
+the correlated-centers correction (`fun_FA` in the reference); `03_validate_correlated_centers.py`
+checks that part against direct simulation instead.
 
 SETUP -- this needs its own environment
 ---------------------------------------
