@@ -12,7 +12,7 @@ written for learning and experimenting. It is not the authors' code and is not a
 them. The reference implementation is
 [schung039/neural_manifolds_replicaMFT](https://github.com/schung039/neural_manifolds_replicaMFT).
 
-## What it does
+## Overview
 
 Given P clouds of activation vectors, one per category, *manifold capacity* α = P/N is the
 largest number of categories per dimension that a single linear readout can separate under
