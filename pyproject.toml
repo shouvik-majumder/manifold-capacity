@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mancap"
 version = "0.1.0"
-description = "Manifold capacity by replica mean-field theory: reimplemented, batched, validated"
+description = "Manifold capacity by replica mean-field theory (MFTMA), with validation against direct simulation"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.23",

@@ -1,7 +1,6 @@
-# mancap: manifold capacity, reimplemented and validated
+# manifold-capacity
 
-A small, self-contained re-implementation of **mean-field theoretic manifold analysis** (MFTMA)
-from
+A re-implementation of mean-field theoretic manifold analysis (MFTMA) from
 
 > Chung, Lee & Sompolinsky, *Classification and Geometry of General Perceptual Manifolds*,
 > [Phys. Rev. X 8, 031003 (2018)](https://doi.org/10.1103/PhysRevX.8.031003)
@@ -10,33 +9,36 @@ from
 > networks*, [Nat. Commun. 11, 746 (2020)](https://doi.org/10.1038/s41467-020-14578-5)
 
 written for learning and experimenting. It is not the authors' code and is not affiliated with
-them; the reference implementation is
+them. The reference implementation is
 [schung039/neural_manifolds_replicaMFT](https://github.com/schung039/neural_manifolds_replicaMFT).
 
 ## What it does
 
-Given P clouds of activation vectors, one per category, *manifold capacity* α = P/N measures how
-many categories per dimension a single linear readout can separate under arbitrary labels. It
-decomposes into an anchor **radius** R_M and anchor **dimension** D_M, which say why capacity is
-what it is. Isolated points give α = 2 (Cover 1965); anything with extent gives less.
+Given P clouds of activation vectors, one per category, *manifold capacity* α = P/N is the
+largest number of categories per dimension that a single linear readout can separate under
+arbitrary labels. It decomposes into an anchor radius R_M and an anchor dimension D_M, which
+describe the part of each manifold that the classifier sees. Isolated points give α = 2
+(Cover 1965); manifolds with extent give less.
 
 `mancap` computes α, R_M and D_M from raw activations, including the correlated-centers
-correction of Cohen et al., using only numpy and scipy.
+correction of Cohen et al., using numpy and scipy.
 
-## Additions beyond the reference implementation
+## Differences from the reference implementation
 
-- **Faster exact solver.** The inner minimisation is solved as a nonnegative QP on its dual,
-  whose Gram matrix does not depend on the Gaussian draw, with an active-set method: 5-12x faster
-  on CPU and identical to the reference draw by draw (to 1e-12).
-- **No legacy dependencies.** The correlated-centers correction uses a closed-form gradient and a
-  self-contained Stiefel optimiser instead of `cvxopt`, `autograd` and old `pymanopt`.
-- **Rank-based frame reduction**, which keeps D_M unbiased: a segment gives D_M = 1.000 rather
-  than 0.81 with the reference's padding (`reduce_dim="qr"` reproduces the reference).
-- **Guarded choice of the correlated-centers rank K**: an elbow rule plus a measured null, so
-  uncorrelated centers give K = 0 rather than an over-projected subspace.
-- **Validation against direct simulation.** `mancap.simulate` never evaluates a replica formula:
-  the best achievable margin is the distance from the origin to the convex hull of the labelled
-  points, so the theory can be checked against the actual separability threshold.
+- The inner minimisation is solved in its dual form, a nonnegative quadratic program whose Gram
+  matrix does not depend on the Gaussian draw, with an active-set method. Results agree with the
+  reference draw by draw to about 1e-12, and the solver is faster on CPU
+  (`scripts/00b_benchmark_reference.py`).
+- The correlated-centers correction uses a closed-form gradient and a self-contained Stiefel
+  optimiser, so `cvxopt`, `autograd` and `pymanopt` are not required.
+- Frames are reduced to the rank of the manifold offsets rather than to the number of samples,
+  which removes a downward bias in D_M (a segment gives D_M = 1.00 rather than 0.81).
+  `reduce_dim="qr"` reproduces the reference behaviour.
+- The rank K of the center subspace is chosen by an elbow rule with an optional measured null,
+  so uncorrelated centers give K = 0. `k_tol=0, min_reduction=0` reproduces the reference's
+  argmin rule.
+- `mancap.simulate` measures the separability threshold directly, without the replica formulas,
+  so the theory can be compared with simulation.
 
 ## Validation
 
@@ -49,13 +51,13 @@ correction of Cohen et al., using only numpy and scipy.
 | Correlated centers: mean error against simulation | 0.216 uncorrected, 0.024 corrected |
 | Active set vs SLSQP; KKT conditions; gradient vs finite differences | agree to 1e-6 or better |
 
-Two findings that matter when applying this to real data:
+Two points relevant to applying the method to data:
 
-- **The theory's margin is standardised**: κ_theory = √N · κ_measured. Without that factor,
-  theory and simulation disagree by orders of magnitude at nonzero margin.
-- **Finite sampling inflates capacity, badly in high dimensions.** A manifold sampled with M
-  points is seen as their convex hull; for a 20-dimensional ball even M = 1000 overestimates
-  capacity by 64%. Report the trend in M rather than a single number.
+- The theory's margin is standardised, κ_theory = √N · κ_measured. Without that factor, theory
+  and simulation disagree by orders of magnitude at nonzero margin.
+- Finite sampling inflates capacity: a manifold sampled with M points is seen as their convex
+  hull. For a 20-dimensional ball, M = 1000 overestimates capacity by 64%. The trend in M should
+  be reported rather than a single value.
 
 ![Validation with points](figures/01_validate_points.png)
 ![Manifolds with extent](figures/02_validate_balls_segments.png)
@@ -64,10 +66,10 @@ Two findings that matter when applying this to real data:
 ## Setup
 
 ```bash
-git clone git@github.com:shouvik-majumder/manifold-capacity.git
+git clone https://github.com/shouvik-majumder/manifold-capacity.git
 cd manifold-capacity
 pip install -e ".[sim,plot,dev]"
-pytest                                  # 82 tests, a few minutes
+pytest                                  # a few minutes
 ```
 
 ## Usage

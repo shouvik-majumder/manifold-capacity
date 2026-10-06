@@ -32,7 +32,7 @@ def planted(P=24, N=120, K=3, strength=0.85, seed=0):
 # ----------------------------------------------------------------------------------------------
 
 def test_gradient_matches_finite_differences():
-    """The one piece that could be silently wrong: a bad factor still yields a plausible subspace."""
+    """A wrong factor in the gradient would still yield a plausible subspace; check it independently."""
     rng = np.random.default_rng(1)
     X = rng.standard_normal((12, 11))
     for K in [1, 2, 4]:
@@ -155,10 +155,9 @@ def test_elbow_beats_argmin_at_recovering_the_rank():
 def test_uncorrelated_centers_get_no_projection_at_all():
     """The correction must not invent structure.
 
-    With isotropic centers there is nothing to remove, and the routine must return an EMPTY
-    subspace so that the correction becomes a no-op. Fitting a subspace here would remove real
-    directions and quietly cost capacity -- which is exactly what happened before the guard
-    existed.
+    With isotropic centers there is nothing to remove, so the routine must return an empty
+    subspace and the correction becomes a no-op. Fitting a subspace here would remove real
+    directions and reduce capacity.
     """
     rng = np.random.default_rng(9)
     Xs = synth.balls(30, 200, D=4, radius=0.2, M=25, rng=rng)

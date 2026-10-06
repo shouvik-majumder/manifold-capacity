@@ -1,54 +1,31 @@
-"""Direct simulation of the separability threshold: the only test that does not trust the theory.
+"""Direct simulation of the separability threshold.
 
-WHY THIS MODULE EXISTS
-----------------------
-Everything else in this package validates the *implementation* of the replica formulas against
-other implementations of the same formulas, or against closed forms derived from them. All of
-that can agree perfectly while the transcription of the theory is wrong -- a misplaced factor,
-the wrong normalisation of the margin, a radius defined with respect to the wrong origin. Such an
-error is invisible to internal consistency checks, because every route shares it.
+The other checks in this package compare implementations of the replica formulas with each
+other or with closed forms derived from them, and would not detect an error shared by all
+of them (a misplaced factor, a wrong margin normalisation). This module does not use the
+theory: it builds P manifolds in R^N, assigns random binary labels, and searches for a
+separating hyperplane. Sweeping the load alpha = P/N locates the empirical threshold, which
+is then compared with the prediction of `capacity.analyze_manifold`.
 
-This module closes that hole by never using the theory at all. It builds P manifolds in R^N,
-assigns random +/-1 labels, and then actually searches for a separating hyperplane. Sweeping the
-load alpha = P/N locates the empirical threshold where separation becomes impossible. If that
-threshold matches the number `capacity.analyze_manifold` predicts, the theory is being applied
-correctly; if it does not, no amount of solver agreement matters.
+Margin
+------
+With z_i = y_i x_i (the label folded into the point), the largest margin a unit-norm readout
+can achieve is
 
-THE KEY IDENTITY THAT MAKES THIS CHEAP
---------------------------------------
-The naive approach is to train a classifier and see whether it succeeds, which is slow and
-depends on the optimizer. Instead, note that the maximum achievable margin has a closed
-characterisation. Writing z_i = y_i x_i for every point of every manifold (label folded into the
-point), the best margin any unit-norm readout can achieve is
+    kappa* = max_{||w|| <= 1} min_i <w, z_i>  =  min_{lambda in simplex} || Z lambda ||       (+)
 
-    kappa* = max_{||w|| <= 1} min_i <w, z_i>
-           = min_{lambda in simplex} || Z lambda ||                                        (+)
+by minimax duality: the distance from the origin to the convex hull of the labelled points.
+One geometric computation per dataset gives the margin exactly, a single sweep over P yields
+the whole curve alpha(kappa), and kappa* = 0 exactly when the origin lies inside the hull.
+(+) is solved by Gilbert's algorithm (Frank-Wolfe with exact line search on the simplex)
+with pairwise steps, and cross-checked against SLSQP. For kappa = 0, `is_separable` uses an
+exact linear-programming feasibility test.
 
-the second line by minimax duality: min over i of a linear function equals the min over convex
-combinations, and max_{||w||<=1} <w, v> = ||v||. So kappa* is simply the DISTANCE FROM THE ORIGIN
-TO THE CONVEX HULL of the labelled points. Three consequences:
-
-  * One geometric computation per simulated dataset gives the margin exactly, with no training,
-    no learning rate and no stopping criterion.
-  * The manifolds are separable with margin kappa exactly when kappa* >= kappa, so a single
-    sweep over P yields the whole capacity curve alpha(kappa), not just the kappa = 0 point.
-  * kappa* = 0 precisely when the origin lies inside the hull, which is the classical
-    non-separability condition.
-
-(+) is solved here by Gilbert's algorithm (Frank-Wolfe with exact line search on the simplex),
-and cross-checked against a general-purpose optimizer. For the kappa = 0 question specifically,
-`is_separable` uses an exact linear-programming feasibility test instead, which is both faster
-and free of convergence concerns -- the LP is the authority at kappa = 0 and Gilbert's algorithm
-is what extends the answer to kappa > 0.
-
-FINITE SIZE IS THE INTERESTING PART, NOT A NUISANCE
----------------------------------------------------
-The replica prediction is a thermodynamic limit: N -> infinity, P -> infinity, P/N fixed. At
-finite N the transition is smeared over a window of width ~ 1/sqrt(N), so the "threshold" is a
-crossing of a smooth curve rather than a jump. `threshold_scan` therefore returns the whole
-separable-fraction curve at each N, and `extrapolate_threshold` fits the 1/N trend. A validation
-that reports a single number at a single N cannot distinguish a correct implementation from one
-that is off by a few percent, because finite-size drift is of exactly that size.
+Finite size
+-----------
+The replica prediction holds for N, P -> infinity at fixed P/N. At finite N the transition
+is smeared over a window of width ~1/sqrt(N), so `threshold_scan` returns the
+separable-fraction curve at each N and `extrapolate_threshold` fits the 1/N trend.
 """
 from __future__ import annotations
 
@@ -107,20 +84,17 @@ def is_separable(Z: np.ndarray, tol_scale: float = 1.0) -> bool:
 
 @dataclass
 class MarginResult:
-    """kappa* with the certificate needed to believe it.
+    """kappa* with its certificate.
 
-    kappa_star  The largest margin a unit-norm readout achieves, as an UPPER bound: every
-                iterate is a genuine point of the convex hull, so ||p|| can only overestimate
-                the distance to it. 0 when inseparable.
-    kappa_lower A rigorous LOWER bound, from the duality gap. The gap bounds the suboptimality
-                of the squared objective f = kappa^2/2, so the true optimum satisfies
-                f* >= f - gap, hence kappa*_true >= sqrt(max(0, kappa_star^2 - 2*gap)). When
-                kappa_lower is 0 the data may be inseparable; when it is positive, separability
-                is PROVEN. This is what makes the margin usable as a decision rather than an
-                estimate.
+    kappa_star  The largest margin a unit-norm readout achieves, as an upper bound: every
+                iterate is a point of the convex hull, so ||p|| can only overestimate the
+                distance to it. 0 when inseparable.
+    kappa_lower A lower bound from the duality gap. The gap bounds the suboptimality of the
+                squared objective f = kappa^2/2, so kappa*_true >= sqrt(max(0, kappa_star^2 -
+                2*gap)). A positive kappa_lower proves separability.
     w           The optimal readout (unit norm), or zeros when inseparable.
     gap         Frank-Wolfe duality gap at termination, in units of the squared objective
-                0.5*||p||^2. Always report it.
+                0.5*||p||^2.
     n_iter      Iterations used. Hitting the cap with a large gap means the answer is an upper
                 bound only.
     converged   gap <= tol.
@@ -158,30 +132,27 @@ def max_margin(
     """kappa*, the largest margin any unit-norm readout achieves, via identity (+).
 
     Minimises ||Z lambda|| over the simplex. Two candidate directions are considered at every
-    iteration and the one that actually decreases the objective more is taken:
+    iteration and the one that decreases the objective more is taken:
 
-      TOWARD step (classical Gilbert / Frank-Wolfe): move from the current hull point towards the
-        vertex with the most negative gradient. Always available, but converges only as O(1/k),
-        because the step must shrink the weight on every other vertex to stay in the simplex.
+      TOWARD step (Gilbert / Frank-Wolfe): move from the current hull point towards the vertex
+        with the most negative gradient. Converges as O(1/k).
 
       PAIRWISE step (Mitchell-Dem'yanov-Malozemov): move weight directly from the worst vertex
-        currently in the support to the best vertex outside it. This can remove a vertex from
-        the support entirely, which the toward step never does, and it gives linear convergence.
+        in the support to the best vertex outside it. This can remove a vertex from the
+        support, and gives linear convergence.
 
-    The mixture matters in practice, not just in theory. Pure Gilbert stalls at a gap around 1e-5
-    on ordinary random instances -- enough to leave kappa* visibly above zero on data that is
-    provably inseparable, so a sign test on it disagrees with the exact LP. With pairwise steps
-    the gap reaches machine precision and the two agree.
+    Pure Gilbert steps stall at a gap around 1e-5 on ordinary random instances, which leaves
+    kappa* visibly above zero on inseparable data; with pairwise steps the gap reaches machine
+    precision and the sign test agrees with the exact LP.
 
     Args:
         Z: Labelled points, shape (N, total).
         max_iter: Iteration cap; each iteration is one matrix-vector product.
-        tol: Convergence tolerance, RELATIVE to the objective scale ||p||^2 (with an absolute
+        tol: Convergence tolerance, relative to the objective scale ||p||^2 (with an absolute
             floor of 1 so that near-inseparable data, where ||p|| -> 0, is held to an absolute
-            standard). A relative test is necessary here: the gap is a difference of quantities
-            of size ||p||^2, so its floating-point floor is eps * ||p||^2, which for a margin of
-            6.5 is about 5e-15. An absolute tolerance below that can never be met, and the
-            routine would report non-convergence while sitting on the exact answer.
+            standard). The gap is a difference of quantities of size ||p||^2, so its
+            floating-point floor is eps * ||p||^2; an absolute tolerance below that could never
+            be met.
 
     Returns:
         MarginResult, carrying both bounds on kappa* and the certificate.
@@ -247,16 +218,12 @@ def max_margin(
 def max_margin_qp(Z: np.ndarray) -> float:
     """kappa* by a general-purpose optimizer on the simplex, as an independent check.
 
-    Solves the SAME problem (+) as `max_margin` but with SLSQP on the smooth objective
-    0.5*||Z lambda||^2 under the simplex constraints, rather than by Frank-Wolfe. Different
-    algorithm, different code path, same answer expected to high precision.
+    Solves the same problem (+) as `max_margin`, with SLSQP on the smooth objective
+    0.5*||Z lambda||^2 under the simplex constraints.
 
-    A note on why the obvious alternative is NOT used: maximising min_i <w, z_i> directly over
-    the unit ball is the primal form, and it is a maximin of linear functions, hence
-    non-differentiable exactly at the optimum. SLSQP assumes smoothness and stalls short of the
-    solution there, typically by around 1e-2 -- large enough to look like a real disagreement
-    while being purely an artifact of applying a smooth optimizer to a kinked objective. The
-    simplex form above has no such kink, which is why it is the right cross-check.
+    The primal form, maximising min_i <w, z_i> over the unit ball, is not used because it is a
+    maximin of linear functions and non-differentiable at the optimum; SLSQP stalls short of
+    the solution there by around 1e-2. The simplex form has no such kink.
     """
     from scipy.optimize import minimize
 
@@ -362,14 +329,12 @@ def threshold_scan(
 def crossing(alphas: np.ndarray, values: np.ndarray, level: float = 0.5) -> float:
     """Load at which a monotonically decreasing curve crosses `level`, by linear interpolation.
 
-    Used two ways: on `frac_sep` with level 0.5 to locate the kappa = 0 threshold, and on
-    `margin` with level kappa to locate the threshold at a nonzero margin. Returns NaN when the
-    curve does not cross within the scanned range, which is a scanning failure and should be
-    treated as one rather than clipped to an endpoint.
+    Used on `frac_sep` with level 0.5 to locate the kappa = 0 threshold, and on `margin` with
+    level kappa to locate the threshold at a nonzero margin. Returns NaN when the curve does
+    not cross within the scanned range.
 
-    A curve that lands exactly ON the level counts as having crossed there; the comparison is
-    strict (`> level`) so that a scan ending precisely at the threshold reports that threshold
-    rather than NaN.
+    A curve that lands exactly on the level counts as having crossed there; the comparison is
+    strict (`> level`) so that a scan ending precisely at the threshold reports it.
     """
     alphas = np.asarray(alphas, dtype=np.float64)
     values = np.asarray(values, dtype=np.float64)
@@ -389,11 +354,10 @@ def crossing(alphas: np.ndarray, values: np.ndarray, level: float = 0.5) -> floa
 def extrapolate_threshold(Ns: Sequence[int], thresholds: Sequence[float]) -> dict[str, float]:
     """Extrapolate finite-N thresholds to N -> infinity by a linear fit in 1/N.
 
-    The leading finite-size correction to a perceptron-style capacity is O(1/N), so plotting the
-    measured threshold against 1/N should give a straight line whose intercept is the
-    thermodynamic value. Reporting the intercept AND the slope matters: a large slope means the
-    scanned N were too small for the intercept to be trusted, which is information a single
-    measurement hides.
+    The leading finite-size correction to a perceptron-style capacity is O(1/N), so the
+    measured threshold against 1/N should be a straight line whose intercept is the
+    thermodynamic value. A large slope means the scanned N were too small for the intercept to
+    be reliable.
 
     Returns:
         dict with `intercept` (the extrapolated threshold), `slope`, and `resid` (RMS residual).

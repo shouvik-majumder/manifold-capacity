@@ -1,28 +1,21 @@
-"""VALIDATION 0 -- cross-check mancap against the original cvxopt/MFTMA implementation.
+"""Validation 0: cross-check mancap against the reference cvxopt implementation.
 
-Why this is exact rather than statistical: the reference and mancap are handed the SAME manifold
-frame and the SAME Gaussian vectors. The only wrinkle is the sign convention -- the reference
-imposes S . V <= -kappa while mancap imposes S . V >= +kappa -- and the two are related by
-V -> -V, T -> -T. So the reference evaluated at -T must equal mancap evaluated at +T, for every
-single draw, not merely on average. Agreement draw by draw is far stronger than agreement on a
-Monte Carlo average, where two different errors could cancel.
+The reference and mancap are given the same manifold frame and the same Gaussian vectors,
+so the comparison is exact rather than statistical. The reference imposes S . V <= -kappa
+while mancap imposes S . V >= +kappa; the two are related by V -> -V, T -> -T, so the
+reference evaluated at -T must equal mancap evaluated at +T for every draw.
 
-WHAT THIS DOES AND DOES NOT ESTABLISH
--------------------------------------
-It establishes that mancap's reformulation of the inner problem into its dual, and its
-active-set solver, return exactly what the published cvxopt implementation returns for the
-per-manifold quantities alpha_M, R_M and D_M. It does NOT establish that either is a correct
-application of the theory -- both could share a transcription error. That is what
-`01_validate_points.py` and the direct-simulation validations are for. It also does not cover
-the correlated-centers correction (`fun_FA` in the reference); `03_validate_correlated_centers.py`
-checks that part against direct simulation instead.
+This establishes that the dual reformulation and the active-set solver return what the
+reference returns for alpha_M, R_M and D_M. It does not establish that either is a correct
+application of the theory, which is what 01_validate_points.py and the direct-simulation
+validations are for. It does not cover the correlated-centers correction (`fun_FA` in the
+reference); 03_validate_correlated_centers.py checks that part against simulation.
 
-SETUP -- this needs its own environment
----------------------------------------
-The reference depends on cvxopt, autograd, and pymanopt's long-renamed API (`pymanopt.solvers`
-was removed years ago), which will not coexist with a current scientific stack. Build a
-throwaway environment, and stub out the pymanopt import, which is only needed for the
-center-correlation step this script does not exercise:
+Setup
+-----
+The reference depends on cvxopt, autograd and an old pymanopt API, so it needs its own
+environment. The pymanopt import is only needed for the center-correlation step, which this
+script does not exercise:
 
     conda create -n mftmaref -c conda-forge python=3.11 "numpy<2" scipy cvxopt autograd -y
     conda activate mftmaref
@@ -32,9 +25,9 @@ center-correlation step this script does not exercise:
     # then comment out its three `from pymanopt...` lines
     python 00_crosscheck_reference.py
 
-Last run 2026-09-21: worst relative disagreement 1.2e-12 (alpha), 1.4e-10 (R_M), 3.3e-08 (D_M),
-over D = 1..12 with and without margin. See 00b_benchmark_reference.py for the timing comparison
-(5-12x faster on CPU, single threaded).
+Measured agreement (2026-09-21): worst relative disagreement 1.2e-12 (alpha), 1.4e-10
+(R_M), 3.3e-08 (D_M) over D = 1..12 with and without margin. See 00b_benchmark_reference.py
+for timing.
 """
 from __future__ import annotations
 

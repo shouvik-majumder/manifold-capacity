@@ -1,24 +1,16 @@
 """Synthetic manifolds with known geometry, for validation.
 
-Every generator returns a list of P arrays of shape (N, M): the format `frames.build_frames`
-consumes, i.e. raw points in the ambient space. Centers are drawn isotropically at random, which
-is exactly the general-position assumption the replica theory makes -- so results on these are
-comparable to theory without any center-correlation correction.
+Every generator returns a list of P arrays of shape (N, M), the format `frames.build_frames`
+consumes. Centers are drawn isotropically at random, which satisfies the general-position
+assumption of the theory, so results are comparable to theory without the center
+correction.
 
-A SAMPLING SUBTLETY THAT MATTERS FOR EVERY TEST
------------------------------------------------
-The inner minimization sees a manifold only through the convex hull of its sampled points
-(see `inner`). A ball sampled with M points on its surface therefore presents an inscribed
-POLYTOPE, not the ball: its hull is strictly smaller, so the measured capacity is strictly
-higher than the true ball's. The gap closes as M grows, and it closes slowly when D is large,
-because covering a D-sphere needs exponentially many points. This is not a defect of the
-implementation, it is a property of the estimator, and it is the single most important control
-when the method is applied to real data where M is whatever the dataset happens to provide.
-`scripts/02_validate_balls.py` measures the bias as a function of M and D.
-
-`ball(..., fill=True)` samples the interior instead of the surface. Interior points are inside
-the hull of the surface points and so are nearly free of information for capacity -- comparing
-the two is a cheap way to see the hull effect directly.
+Sampling: the inner minimisation sees a manifold through the convex hull of its sampled
+points. A ball sampled with M surface points presents an inscribed polytope, so its
+measured capacity is higher than the ball's, and the gap closes slowly with M when D is
+large. scripts/02_validate_balls_and_segments.py measures this bias as a function of M and
+D. `ball(..., fill=True)` samples the interior instead; interior points lie inside the hull
+of the surface points and contribute little to capacity.
 """
 from __future__ import annotations
 
@@ -43,18 +35,16 @@ def correlated_centers(
     """P centers with a planted K-dimensional shared component. Shape (N, P), plus its basis.
 
     Built as  center = strength * (shared K-dim component) + sqrt(1 - strength^2) * (isotropic),
-    then renormalised. This is the pathology real representations exhibit: a few directions carry
-    most of the between-category variance, so the centers are far from the general position the
-    theory assumes.
+    then renormalised. This mimics the structure of real representations, in which a few
+    directions carry most of the between-category variance.
 
-    Returning the planted basis matters for validation: `centers.find_center_subspace` should
-    recover this subspace, and recovering it is a much sharper test than merely observing that
-    the residual correlation went down.
+    The planted basis is returned so that `centers.find_center_subspace` can be tested on
+    whether it recovers this subspace, rather than only on whether the residual correlation
+    decreases.
 
     Args:
         K: Dimension of the planted shared subspace.
-        strength: 0 gives isotropic centers, 1 puts them entirely inside the subspace. Around
-            0.8 is a realistic level of shared structure.
+        strength: 0 gives isotropic centers, 1 puts them entirely inside the subspace.
 
     Returns:
         (centers (N, P), planted basis (N, K) orthonormal).
@@ -178,11 +168,9 @@ def rings(
 ) -> list[np.ndarray]:
     """P circles (1-spheres) of the given radius, each in its own random 2-plane.
 
-    A ring is a D = 2 manifold whose points all sit at the same distance from the center, so its
-    hull is a regular M-gon. Included because it is the geometry that turns up in real models --
-    weekdays and months lie on circles in language model activations -- so having its capacity
-    signature on synthetic data with known parameters is useful before looking for it in a
-    network.
+    A ring is a D = 2 manifold whose points all sit at the same distance from the center, so
+    its hull is a regular M-gon. Included as a reference geometry: cyclic variables such as
+    weekdays are represented on circles in some language-model activations.
     """
     C = _random_centers(P, N, rng, center_norm)
     theta = np.linspace(0.0, 2.0 * np.pi, M, endpoint=False)
@@ -204,11 +192,11 @@ def ellipsoids(
 ) -> list[np.ndarray]:
     """P ellipsoids with the given per-axis radii, each in its own random subspace.
 
-    The case that separates R_M and D_M from their naive counterparts. An ellipsoid with one
-    long axis and many short ones has a large geometric radius and a large geometric dimension,
-    but the classifier recruits anchors almost exclusively along the long axis, so D_M should
-    come out near 1 while the raw rank is D. If an implementation reports D_M ~ D here, it is
-    computing geometry rather than anchor geometry.
+    The case that separates R_M and D_M from the geometric radius and dimension. An ellipsoid
+    with one long axis and many short ones has a large geometric radius and dimension, but the
+    classifier recruits anchors almost exclusively along the long axis, so D_M should come out
+    near 1 while the rank is D. An implementation that reports D_M near D here is computing
+    the geometric rather than the anchor dimension.
     """
     radii = np.asarray(radii, dtype=np.float64)
     D = radii.size

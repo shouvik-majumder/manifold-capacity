@@ -49,12 +49,11 @@ def test_rank_reduction_gives_the_true_shape_dimension():
 
 
 def test_padding_leaves_alpha_and_radius_but_corrupts_dimension():
-    """The reason rank reduction is the default, asserted rather than asserted-to-be-obvious.
+    """Padding the frame leaves alpha and R_M unchanged and lowers D_M.
 
-    Padding the frame with a direction the manifold cannot reach must leave alpha and R_M
-    untouched -- the padded row of S is zero, so that coordinate of V is unconstrained and
-    contributes nothing -- while D_M is diluted. For a rank-1 manifold seen in a 2-dimensional
-    shape space the expected value is 2*(2/pi)^2 = 0.8106 instead of the correct 1.
+    The padded row of S is zero, so that coordinate of V is unconstrained and contributes
+    nothing to F or to the anchor deviations, while D_M is diluted. For a rank-1 manifold seen
+    in a 2-dimensional shape space the expected value is 2*(2/pi)^2 = 0.8106 instead of 1.
     """
     from mancap.capacity import analyze_manifold
 
@@ -97,12 +96,11 @@ def test_raw_radius_matches_construction_without_global_mean():
 
 
 def test_global_mean_subtraction_inflates_radii_as_predicted():
-    """With global-mean subtraction, radii grow by 1/sqrt(1 - 1/P). Documented, not a bug.
+    """With global-mean subtraction, radii grow by 1/sqrt(1 - 1/P).
 
     Subtracting the grand mean shortens every center vector, and the frame divides offsets by
-    the center norm, so radii are inflated by a factor that depends only on the NUMBER of
-    manifolds. Asserting the predicted factor turns a surprising 7% discrepancy into a checked
-    property, and guards against someone later "fixing" it.
+    the center norm, so radii are inflated by a factor that depends only on the number of
+    manifolds. The test asserts the predicted factor.
     """
     rng = np.random.default_rng(20)
     R = 0.2
@@ -132,10 +130,10 @@ def test_center_norms_are_reported():
 
 
 def test_single_manifold_is_refused_with_an_explanation():
-    """One manifold's center IS the global mean, so the frame cannot be normalised.
+    """One manifold's center is the global mean, so the frame cannot be normalised.
 
-    Failing loudly matters here: silently producing a zero-norm center would give a frame full of
-    infinities or, worse, a plausible-looking number from a degenerate normalisation.
+    A zero-norm center would otherwise give a frame of infinities or a meaningless number from a
+    degenerate normalisation.
     """
     rng = np.random.default_rng(5)
     Xs = synth.balls(1, 50, D=2, radius=0.3, M=10, rng=rng)

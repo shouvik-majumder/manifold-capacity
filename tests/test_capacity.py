@@ -40,9 +40,9 @@ def within_sem(result, expected: float, n_sigma: float = 4.0) -> bool:
 def test_point_capacity_end_to_end(kappa):
     """Point manifolds must reproduce alpha_0(kappa), and alpha = 2 at kappa = 0.
 
-    Run through the full public path -- synthetic points, frame construction, capacity -- so this
+    Run through the full public path (synthetic points, frame construction, capacity) so this
     tests the preprocessing as well as the estimator. A one-point manifold has zero offsets, so
-    its frame is degenerate by construction; that this still yields the right answer is the point.
+    its frame is degenerate by construction and must still yield the right answer.
     """
     rng = np.random.default_rng(0)
     Xs = synth.points(P=40, N=120, rng=rng)

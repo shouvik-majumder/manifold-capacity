@@ -1,59 +1,32 @@
-"""Manifold capacity, anchor radius and anchor dimension, from the inner minimization.
+"""Manifold capacity, anchor radius and anchor dimension from the inner minimisation.
 
-WHAT THE THREE NUMBERS MEAN
----------------------------
-alpha_M   CAPACITY. The largest load P/N (manifolds per ambient dimension) at which a single
-          linear readout can still separate the manifolds under random +/-1 labels, with every
-          point of every manifold on the correct side of the margin kappa. Reference value:
-          isolated points give alpha = 2 at kappa = 0 (Cover 1965). Anything that makes a
-          manifold bigger, higher dimensional, or worse oriented pushes alpha below 2. A large
-          alpha means "a downstream linear reader could handle many such categories at once",
-          which is the operational sense in which a representation is linearly usable.
+alpha_M  Capacity: the largest load P/N at which a single linear readout separates the
+         manifolds under random binary labels with every point on the correct side of the
+         margin kappa. Isolated points give alpha = 2 at kappa = 0 (Cover 1965).
 
-R_M       ANCHOR RADIUS. The typical extent of the manifold as the classifier actually sees it,
-          in units of the distance from the origin to the manifold's center. Crucially this is
-          NOT the geometric radius of the point cloud: it is the spread of the ANCHOR POINTS
-          (the support vectors selected by random Gaussian directions) about their own mean.
-          A cloud can be geometrically large but have a small R_M if only a small part of its
-          hull is ever recruited as a support vector.
+R_M      Anchor radius: the spread of the anchor points (the support vectors selected by the
+         Gaussian directions) about their mean, in units of the center norm. This differs
+         from the geometric radius of the point cloud.
 
-D_M       ANCHOR DIMENSION. How many dimensions of the surrounding Gaussian field the manifold
-          actually presents to the classifier. Also not the geometric dimension: a D = 50 cloud
-          whose anchors always come from a 3-dimensional sliver has D_M near 3. D_M is bounded
-          by D and is usually far below it.
+D_M      Anchor dimension: the effective number of shape dimensions spanned by the anchors.
+         Bounded by the shape dimension D and usually well below it.
 
-The reason to report R_M and D_M alongside alpha is that they decompose it. In the small-radius
-regime the theory gives alpha_M ~ alpha_0(kappa + R_M sqrt(D_M)), so the two geometric numbers
-say *why* capacity is what it is: a representation can lose capacity by growing (R_M up) or by
-spreading into more directions (D_M up), and those have different mechanistic causes.
+In the small-radius regime alpha_M ~ alpha_0(kappa + R_M sqrt(D_M)), so R_M and D_M
+decompose the capacity.
 
-EQUATION PROVENANCE
--------------------
-Capacity      Eqs. 16-17 of Chung, Lee & Sompolinsky, PRX 8, 031003 (2018)
-Radius R_M    Eq. 28 of the same paper
-Dimension D_M Eq. 29 of the same paper
+Equations: capacity, Eqs. 16-17; R_M, Eq. 28; D_M, Eq. 29 of Chung, Lee and Sompolinsky
+(2018).
 
-A NOTE ON HOW alpha IS RECOVERED FROM THE ANCHOR
-------------------------------------------------
-Rather than using F = ||V - T||^2 straight out of the solver, we recompute it from the anchor:
+F is taken from the solver objective ||V - T||^2 and also recomputed from the anchor,
 
-    lambda = max(kappa - T . s_tilde, 0) / ||s_tilde||^2 ,      F = lambda^2 ||s_tilde||^2
+    lambda = max(kappa - T . s_tilde, 0) / ||s_tilde||^2,      F = lambda^2 ||s_tilde||^2.
 
-These agree exactly at the solution (that is the dual relation V = T + lambda s_tilde), so the
-recomputation is redundant -- deliberately. It goes through the anchor, which is the quantity
-R_M and D_M depend on, so agreement between the two routes tests the anchors and not just the
-objective. `analyze_manifold` returns both and their discrepancy, and the test suite asserts it
-is tiny. This is the internal consistency check that a single-route implementation cannot make.
+The two agree at the solution; `analyze_manifold` reports their discrepancy as a
+consistency check on the anchors, which R_M and D_M depend on.
 
-COMBINING MANIFOLDS
--------------------
-Capacities do not average; their reciprocals do. alpha^{-1} is a Gaussian mean of F, so pooling
-P manifolds means pooling their F values:
+Capacities combine through their reciprocals: alpha^{-1} is a Gaussian mean of F, so
 
-    alpha_total = 1 / mean_over_manifolds( 1 / alpha_mu )
-
-Reporting the arithmetic mean of per-manifold alphas instead is a common and silent error; it
-overstates capacity whenever the manifolds are heterogeneous.
+    alpha_total = 1 / mean_over_manifolds( 1 / alpha_mu ).
 """
 from __future__ import annotations
 
@@ -245,11 +218,9 @@ def ball_capacity_mc(
 ) -> tuple[float, float, float]:
     """Capacity, R_M and D_M of a D-dimensional ball, using the closed-form inner solution.
 
-    No sampling of the manifold and no iterative solver: the inner minimization for a ball is
-    a second-order cone projection with an analytic answer (`inner.solve_ball`), so the only
-    Monte Carlo here is the Gaussian average itself. This is the reference curve that the
-    general sampled-manifold pipeline has to reproduce, and it is the strongest available test
-    because the manifold is neither a point nor low dimensional.
+    The inner minimisation for a ball is a second-order cone projection with an analytic
+    answer (`inner.solve_ball`), so the only Monte Carlo is the Gaussian average. This is the
+    reference curve for the sampled-manifold pipeline.
 
     Returns:
         (alpha, R_M, D_M)

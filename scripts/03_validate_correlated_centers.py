@@ -1,39 +1,23 @@
-"""VALIDATION 3 -- does the correlated-centers correction actually help?
+"""Validation 3: does the correlated-centers correction improve the prediction?
 
-THE QUESTION
-------------
-The replica theory assumes the P manifold centers are in general position. Real representations
-violate this badly. The published correction finds the low-rank subspace carrying the shared
-center structure and projects it out before the analysis. `mancap.centers` reimplements it, and
-its own tests show that it recovers a planted subspace. That is a test of the OPTIMIZER, not of
-the CORRECTION: it shows the code finds the subspace it was asked to find, not that removing
-that subspace makes the theory predict reality.
-
-This script asks the second question, and it can only be asked by simulation:
+The replica theory assumes the P manifold centers are in general position; real
+representations violate this. The correction of Cohen et al. (2020) finds the low-rank
+subspace carrying the shared center structure and projects it out. The unit tests of
+`mancap.centers` show that it recovers a planted subspace; this script asks whether
+removing that subspace makes the theory predict the simulated separability threshold.
 
   1. Build P manifolds whose centers have a planted K-dimensional shared component, with a
-     tunable strength from 0 (isotropic, theory's assumption satisfied) to near 1 (centers almost
-     entirely inside a 3-dimensional subspace).
-  2. Predict capacity two ways: WITHOUT the correction, and WITH it.
-  3. Measure capacity by direct simulation -- random labels, exact linear-programming test for a
-     separating hyperplane, sweep the load, find the threshold.
-  4. See which prediction tracks the measurement as the correlation grows.
+     strength from 0 (isotropic) to near 1 (centers almost entirely inside a 3-dimensional
+     subspace).
+  2. Predict capacity without and with the correction.
+  3. Measure capacity by direct simulation: random labels, exact linear-programming test for
+     a separating hyperplane, sweep the load, find the threshold.
+  4. Compare the two predictions with the measurement as the correlation grows.
 
-Possible outcomes, all worth knowing:
-  * The corrected curve tracks the simulation and the uncorrected one diverges -> the correction
-    works and should be used on real data.
-  * Both track -> center correlation matters less than assumed at these sizes, and the
-    correction is optional.
-  * Neither tracks -> something is wrong, or the correction addresses a regime this simulation
-    does not reach. Either way, do not put uncorrected numbers on real data.
-
-A CAVEAT THAT IS PART OF THE RESULT
------------------------------------
-The center subspace is estimated from the P centers present, so it depends on P, while the
-simulation sweeps P along the load axis. The theory here is evaluated at a single representative
-P; because the planted structure is defined pairwise, the correlation between any two centers is
-independent of P, so this is a mild approximation rather than a confound. It is stated because
-it is the kind of detail that silently invalidates comparisons like this one.
+Caveat: the center subspace is estimated from the P centers present, so it depends on P,
+while the simulation sweeps P along the load axis. The theory is evaluated at a single
+representative P. Because the planted structure is defined pairwise, the correlation between
+any two centers is independent of P, so this is a mild approximation.
 """
 from __future__ import annotations
 
@@ -59,11 +43,10 @@ def make_correlated(P, N, rng, K, strength, D, radius, M):
 def theory_capacity(Xs, kappa, n_t, seed, corrected, n_restarts=3, n_null=3):
     """Capacity predicted with or without the center-subspace projection.
 
-    n_null > 0 makes the "is there any structure here?" threshold a MEASURED chance level rather
-    than a fixed constant. It matters for the strength = 0 row: fitting a subspace to isotropic
-    centres removes about 10% of their correlation by chance, so a fixed 10% threshold sits right
-    on the noise and the routine projects a rank-8 subspace out of data that has none -- costing
-    capacity for nothing and making the corrected prediction undershoot.
+    n_null > 0 makes the structure threshold a measured chance level rather than a fixed
+    constant. This matters for the strength = 0 row: fitting a subspace to isotropic centres
+    removes about 10% of their correlation by chance, so a fixed 10% threshold would project a
+    rank-8 subspace out of data that has none and make the corrected prediction undershoot.
     """
     sub = None
     info = {}

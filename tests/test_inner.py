@@ -115,12 +115,10 @@ def test_point_manifold_closed_form():
 def test_ball_closed_form_constraint_is_correct():
     """The cone reduction v_c - R||v_s|| >= kappa must equal the true minimum over the ball.
 
-    Checks the algebra of `solve_ball` against brute force over sampled ball points. Note the
-    asymmetry, which is the whole story of sampling in this method: finitely many samples can
-    only MISS the worst direction, never invent a worse one, so the brute-force minimum is an
-    upper bound on the analytic one. Requiring equality is therefore only legitimate at low D,
-    where samples do cover the sphere; at D = 6 the bound is one-sided and that is what gets
-    asserted.
+    Checks the algebra of `solve_ball` against brute force over sampled ball points. Finitely
+    many samples can only miss the worst direction, never invent a worse one, so the
+    brute-force minimum is an upper bound on the analytic one. Equality is required only at low
+    D, where the samples cover the sphere; at D = 6 the one-sided bound is asserted.
     """
     rng = np.random.default_rng(5)
     R, kappa, M = 0.35, 0.1, 20000
@@ -196,9 +194,9 @@ def test_rotation_invariance():
 def test_duplicate_and_interior_points_are_free():
     """Adding duplicated points, or points inside the hull, cannot change the answer.
 
-    The inner problem sees only the convex hull, so this is a defining property rather than a
-    nice-to-have. It is also the practical reason capacity is insensitive to how densely a cloud
-    is sampled in its interior, and sensitive only to how well its extremes are covered.
+    The inner problem sees only the convex hull, so this is a defining property. It is also why
+    capacity is insensitive to how densely a cloud is sampled in its interior and sensitive
+    only to how well its extremes are covered.
     """
     rng = np.random.default_rng(8)
     S = random_manifold(rng, D=3, M=6)

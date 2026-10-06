@@ -1,20 +1,14 @@
-"""Closed forms that the numerical pipeline must reproduce.
+"""Closed-form results used to validate the numerical pipeline.
 
-These are the fixed points of the whole library. Every one of them is an independent statement
-about what the answer has to be, derived on paper rather than measured, so a disagreement always
-means the code is wrong and never means the data is interesting.
-
-THE POINT CAPACITY (Cover 1965; Gardner 1988 for the margin)
-------------------------------------------------------------
-For isolated points the inner minimization collapses to one dimension, F(T) = max(0, kappa - T)^2,
-and the Gaussian average can be done in closed form:
+Point capacity (Cover 1965; Gardner 1988 for the margin)
+--------------------------------------------------------
+For isolated points the inner minimisation is one-dimensional, F(T) = max(0, kappa - T)^2,
+and the Gaussian average has a closed form:
 
     alpha_0(kappa)^{-1} = integral_{-inf}^{kappa} (kappa - t)^2 phi(t) dt
                         = (1 + kappa^2) Phi(kappa) + kappa phi(kappa)
 
-with phi and Phi the standard normal density and CDF. At kappa = 0 this is 1/2, so alpha_0 = 2.
-Large positive kappa makes separation hard and alpha_0 falls to 0; large negative kappa makes it
-trivial and alpha_0 diverges.
+with phi and Phi the standard normal density and CDF. At kappa = 0 this gives alpha_0 = 2.
 """
 from __future__ import annotations
 
@@ -27,9 +21,8 @@ def point_capacity(kappa: float | np.ndarray) -> float | np.ndarray:
 
     alpha_0(kappa) = 1 / [ (1 + kappa^2) Phi(kappa) + kappa phi(kappa) ]
 
-    This is the single most important number in the library: it is the kappa = 0 value of 2 that
-    fixes all the normalisation conventions, and it is the function the low-rank approximation
-    below evaluates at a shifted margin.
+    The kappa = 0 value of 2 fixes the normalisation conventions used throughout the package.
+    The low-rank approximation below evaluates this function at a shifted margin.
     """
     k = np.asarray(kappa, dtype=np.float64)
     inv = (1.0 + k ** 2) * norm.cdf(k) + k * norm.pdf(k)
@@ -73,44 +66,34 @@ def margin_for_capacity(alpha: float) -> float:
 def standardise_margin(kappa_measured: float | np.ndarray, N: int) -> float | np.ndarray:
     """Convert a measured geometric margin into the theory's units: kappa_theory = sqrt(N) * kappa.
 
-    THIS CONVERSION IS EASY TO MISS AND SILENTLY WRONG WITHOUT IT.
-
     A simulation measures the margin geometrically: with a unit-norm readout w and unit-norm
-    points x, the achieved margin is min_i y_i <w, x_i>, a number that shrinks as ~1/sqrt(P).
-    The replica theory's kappa is not that number. Its Gaussian field T is the STANDARDISED
-    overlap: for random unit w, the overlap <w, x> has standard deviation 1/sqrt(N), so
-    T = sqrt(N) <w, x> and therefore
+    points x, the achieved margin is min_i y_i <w, x_i>. The replica theory's kappa is the
+    standardised overlap: for random unit w, <w, x> has standard deviation 1/sqrt(N), so
+    T = sqrt(N) <w, x> and
 
         kappa_theory = sqrt(N) * kappa_measured.
 
-    Verified by scaling collapse rather than by derivation alone: measuring kappa* across loads
-    at N = 50, 100, 200, 400 and rescaling by sqrt(N) makes the four curves fall on top of each
-    other and on the inverse of alpha_0, from alpha = 0.3 (kappa = 1.53) to alpha = 1.9
-    (kappa = 0.03). Without the factor, a comparison of theory to simulation at nonzero margin
-    disagrees by orders of magnitude -- and the disagreement looks like a capacity error rather
-    than a units error, which is what makes it dangerous.
-
-    See `scripts/01_validate_points.py` for the collapse figure.
+    The convention is checked by a scaling collapse in scripts/01_validate_points.py: kappa*
+    measured across loads at N = 50 to 400 and rescaled by sqrt(N) falls on a single curve
+    matching the inverse of alpha_0. Without the factor, theory and simulation disagree by
+    orders of magnitude at nonzero margin.
     """
     return np.sqrt(N) * np.asarray(kappa_measured)
 
 
 def low_rank_approx(kappa: float, radius: float, dimension: float) -> float:
-    """The standard small-radius approximation alpha_M ~ alpha_0 of an effective margin.
+    """The small-radius approximation alpha_M ~ alpha_0 of an effective margin.
 
         alpha_M(kappa)  ~  alpha_0( (kappa + R_M sqrt(D_M)) / sqrt(1 + R_M^2) )
 
-    The reading is that a manifold behaves like a point that has been handed a harder margin:
-    being large (R_M) and being spread over many directions (D_M) both push the effective margin
-    up, and capacity down. This is the formula that makes R_M and D_M worth reporting at all --
-    it is the bridge from geometry back to capacity.
+    A manifold behaves like a point with a harder margin: a larger radius R_M and a larger
+    dimension D_M both raise the effective margin and lower capacity. This relation connects
+    R_M and D_M to capacity.
 
-    IMPORTANT: this is an asymptotic approximation, valid for small radius, and it is quoted in
-    several slightly different normalisations in the literature. It is NOT used anywhere in the
-    estimation path. `scripts/02_validate_balls.py` measures its accuracy against the exact ball
-    capacity across R and D rather than assuming it, and the test suite only asserts that the
-    two agree in the regime where the approximation is supposed to hold. Treat a discrepancy at
-    large R_M as expected behaviour of the approximation, not as a bug.
+    It is an asymptotic approximation, valid for small radius, and appears in several
+    normalisations in the literature. It is not used in the estimation path;
+    scripts/02_validate_balls_and_segments.py measures its accuracy against the exact ball
+    capacity, and the tests assert agreement only in the small-radius regime.
     """
     eff = (kappa + radius * np.sqrt(dimension)) / np.sqrt(1.0 + radius ** 2)
     return point_capacity(eff)

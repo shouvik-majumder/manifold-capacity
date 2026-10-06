@@ -1,43 +1,33 @@
-"""VALIDATION 2 -- manifolds with extent: exact balls, sampling bias, and a theory-free threshold.
+"""Validation 2: manifolds with extent. Exact balls, sampling bias, and a theory-free threshold.
 
-Validation 1 established the point limit. Points are a degenerate case: no radius, no dimension,
-and the inner minimization collapses to one variable. This script validates the parts of the
-theory that only exist once a manifold has extent.
+Validation 1 established the point limit, where the inner minimisation collapses to one
+variable. This script validates the parts of the theory that only exist once a manifold has
+extent.
 
-FOUR QUESTIONS, IN ORDER OF HOW MUCH THEY CAN GO WRONG
-------------------------------------------------------
 (A) Do alpha, R_M and D_M behave correctly for a manifold with known geometry?
-    Uses `inner.solve_ball`, the closed-form cone projection, so the manifold is a TRUE ball
-    rather than a sampled approximation of one, and the only Monte Carlo is the Gaussian
-    average. Expected: alpha falls with radius; R_M tracks the true radius at low D; D_M rises
-    with D but stays below it.
+    Uses `inner.solve_ball`, the closed-form cone projection, so the manifold is an exact
+    ball and the only Monte Carlo is the Gaussian average. Expected: alpha falls with
+    radius; R_M tracks the true radius at low D; D_M rises with D but stays below it.
 
-(B) How badly does finite sampling bias capacity?
+(B) How much does finite sampling bias capacity?
     The estimator sees only the convex hull of the sampled points, so a ball sampled with M
-    points is really an inscribed polytope: smaller, easier to separate, higher capacity. This is
-    the single most important systematic when the method is applied to real data, where M is
-    whatever the dataset provides and D is large. Measured against the exact ball, as a function
-    of M and D.
+    points is an inscribed polytope with higher capacity than the ball. Measured against the
+    exact ball as a function of M and D.
 
-(C) Is the low-rank approximation alpha_M ~ alpha_0((kappa + R sqrt(D))/sqrt(1+R^2)) accurate?
-    This is the formula that makes R_M and D_M interpretable, and it is quoted in several
-    normalisations. It is not used in the estimation path, so this measures it rather than
-    trusting it, and locates the radius beyond which it stops being usable.
+(C) Is the low-rank approximation alpha_M ~ alpha_0((kappa + R sqrt(D))/sqrt(1+R^2))
+    accurate? It is not used in the estimation path; this measures its range of validity.
 
-(D) THE IMPORTANT ONE: does the theory predict the empirical threshold for a manifold with
-    extent? Direct simulation again -- build the manifolds, label them randomly, solve for a
-    separating hyperplane, find where separability breaks -- but now for SEGMENTS rather than
-    points. Segments are chosen deliberately: a segment's convex hull is exactly its two
-    endpoints, so M = 2 represents the manifold with NO sampling bias at all. That isolates the
-    question "is the theory right about manifolds with extent" from the question "is my sampling
-    adequate", which balls would confound.
+(D) Does the theory predict the empirical threshold for a manifold with extent? Direct
+    simulation for segments: a segment's convex hull is exactly its two endpoints, so M = 2
+    represents the manifold with no sampling bias, which separates the question of the
+    theory's correctness from the question of sampling adequacy.
 
-A NOTE ON THE FRAME CONVENTION USED HERE
-----------------------------------------
-Theory curves are computed with subtract_global_mean=False so that a manifold built with nominal
-radius R really has radius R. With the global mean subtracted, radii are inflated by
-1/sqrt(1 - 1/P), and P changes along a load scan, so the manifold being analysed would drift as
-the scan proceeded. The simulation separates through the origin with no bias term, matching.
+Frame convention
+----------------
+Theory curves are computed with subtract_global_mean=False so that a manifold built with
+nominal radius R has radius R; with the global mean subtracted, radii are inflated by
+1/sqrt(1 - 1/P), and P changes along a load scan. The simulation separates through the
+origin with no bias term, matching this convention.
 """
 from __future__ import annotations
 

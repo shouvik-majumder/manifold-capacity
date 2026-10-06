@@ -33,12 +33,12 @@ def test_standardise_margin_is_sqrt_n():
 
 @pytest.mark.slow
 def test_margin_collapses_across_N_onto_the_theory():
-    """The decisive test of the convention: sqrt(N) * kappa* is N-independent and matches theory.
+    """sqrt(N) * kappa* is N-independent and matches the theory.
 
     Measures the achievable margin for point manifolds at several loads and several ambient
     dimensions. After the sqrt(N) rescaling the curves must fall on top of each other and on
-    alpha_0 inverted. A collapse across a factor of 8 in N cannot happen by accident, and no
-    amount of solver-vs-solver agreement would have caught a wrong convention here.
+    alpha_0 inverted. Solver-to-solver comparisons cannot detect a wrong margin convention;
+    this collapse does.
     """
     loads = [0.5, 1.0, 1.6]
     Ns = [50, 200, 400]

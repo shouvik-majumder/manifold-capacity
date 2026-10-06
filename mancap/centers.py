@@ -1,54 +1,36 @@
-"""Correlated manifold centers: measuring the violation, and correcting for it.
+"""Correlated manifold centers: diagnostic and correction.
 
-THE PROBLEM
------------
-The replica calculation treats the P manifold centers as being in general position -- effectively
-random relative to one another, so that in high dimension they are nearly orthogonal. Real
-representations do not comply. In a network layer, a few directions carry most of the
-between-category variance, so the centers are concentrated in a low-dimensional subspace and are
-strongly correlated. Capacity computed without accounting for this is biased, and the bias is not
-small.
+The replica calculation treats the P manifold centers as being in general position. In a
+network layer a few directions carry most of the between-category variance, so the centers
+are concentrated in a low-dimensional subspace, and capacity computed without accounting for
+this is biased.
 
-THE CORRECTION (Cohen, Chung, Lee & Sompolinsky, Nat. Commun. 2020)
---------------------------------------------------------------------
-Find the K-dimensional subspace that carries the shared center structure, project it out of all
-the manifold data, and run the ordinary analysis on what remains. "Carries the shared structure"
-is made precise by a cost function: after removing the subspace, how correlated are the residual
-centers? Writing X for the centers in an orthonormal basis of their own span, and V for an
-orthonormal basis of the candidate subspace,
+The correction of Cohen, Chung, Lee and Sompolinsky (2020) finds the K-dimensional subspace
+carrying the shared center structure and projects it out before the analysis. With X the
+centers in an orthonormal basis of their span and V an orthonormal basis of the candidate
+subspace,
 
     residual Gram      A = X X^T - (XV)(XV)^T
     residual norms^2   c0 = diag(X X^T) - rowsum((XV)^2)
     cost(V)            = (1/2) sum_mn A_mn^2 / (c0_m c0_n)
 
-which is the sum of SQUARED RESIDUAL CORRELATION COEFFICIENTS. Minimising it over the Stiefel
-manifold {V : V^T V = I_K} gives the subspace whose removal leaves the centers as uncorrelated as
-possible. K is then chosen as the rank that minimises the residual correlation.
+is the sum of squared residual correlation coefficients, minimised over the Stiefel
+manifold {V : V^T V = I_K}.
 
-WHAT IS DIFFERENT HERE FROM THE REFERENCE IMPLEMENTATION
---------------------------------------------------------
-Same cost function, same criterion, two changes:
+Implementation notes
+--------------------
+The gradient is computed in closed form,
 
-  * The gradient is computed in closed form at O(P^2 K + N P K) instead of by materialising a
-    (P, P, N, K) tensor. For P = 100 centers in N = 99 dimensions at K = 10 the reference's
-    tensor is ~80 MB per evaluation; the identity below needs none of it. Both reduce to
+    dcost/dV = -2 X^T (PF1 @ c) + 2 X^T diag(PF2 @ c0) @ c,
+    PF1 = A / (c0 c0^T),   PF2 = A^2 / (c0 c0^T)^2,
 
-        dcost/dV = -2 X^T (PF1 @ c) + 2 X^T diag(PF2 @ c0) @ c
-        PF1 = A / (c0 c0^T),   PF2 = A^2 / (c0 c0^T)^2
+and checked against finite differences (`check_gradient`). The Stiefel optimisation is a
+Riemannian gradient descent with QR retraction and Armijo backtracking. The rank K is
+selected by an elbow rule with an optional measured null (`find_center_subspace`); the
+reference implementation uses the argmin of the residual correlation.
 
-    and `check_gradient` verifies it against finite differences.
-  * The Stiefel optimization is a self-contained Riemannian gradient descent with QR retraction
-    and Armijo backtracking, so pymanopt (whose `pymanopt.solvers` API was removed years ago) is
-    not needed.
-
-HONEST STATUS OF THIS MODULE
-----------------------------
-The cost function, its gradient, and the optimizer are each tested directly. Whether applying
-this correction makes the theory match reality on correlated data is a separate question, and it
-is answered by direct simulation in `scripts/03_validate_correlated_centers.py`: build manifolds
-with deliberately correlated centers, measure the empirical separability threshold, and compare
-it against the corrected and uncorrected predictions. Do not trust the correction on real data
-without looking at that figure first.
+Whether the correction makes the theory match simulated separability on correlated data is
+tested in scripts/03_validate_correlated_centers.py.
 """
 from __future__ import annotations
 
@@ -125,9 +107,8 @@ def check_gradient(
 ) -> float:
     """Largest absolute discrepancy between the analytic gradient and finite differences.
 
-    The closed-form gradient is the one piece of this module that could be silently wrong: a
-    mistaken factor would still produce a plausible subspace, just not the optimal one. Finite
-    differences are the only check that does not share its algebra.
+    A mistaken factor in the closed-form gradient would still produce a plausible subspace;
+    finite differences check it independently of its algebra.
     """
     N = X.shape[1]
     V = np.linalg.qr(rng.standard_normal((N, K)))[0]
@@ -223,7 +204,7 @@ class CenterSubspace:
                  rather than asserted. A flat curve means no low-rank structure exists and the
                  correction is doing nothing useful.
     K_argmin     The rank that minimises residual correlation outright. Reported alongside K
-                 because they differ, and the difference is the point -- see `find_center_subspace`.
+                 since the two can differ; see `find_center_subspace`.
     reduction    (baseline - min(by_K)) / baseline: the fraction of center correlation that the
                  best subspace removes. Small values mean there is no low-rank structure to find.
     """
@@ -285,36 +266,26 @@ def find_center_subspace(
 ) -> CenterSubspace:
     """Locate the low-rank structure shared by the manifold centers.
 
-    CHOOSING K IS WHERE THIS GOES WRONG, AND THE OBVIOUS RULE IS THE WRONG ONE
-    --------------------------------------------------------------------------
-    Residual correlation decreases almost monotonically in K -- there is always one more
-    direction whose removal helps a little -- so taking the outright argmin (which is what the
-    reference implementation does) systematically over-estimates the rank. Measured on data with
-    a PLANTED rank-3 component and P = 60 manifolds, argmin selects K = 8-10, and at zero planted
-    correlation it still selects 10. That is not free: every removed direction is one the
-    classifier could have used, so over-projection biases capacity DOWNWARD. In the validation
-    run it made the corrected prediction undershoot the simulated capacity at every correlation
-    strength.
+    Residual correlation decreases almost monotonically in K, so the outright argmin (the
+    reference implementation's rule) tends to over-estimate the rank: on data with a planted
+    rank-3 component and P = 60 manifolds it selects K = 8-10, and at zero planted correlation
+    it still selects 10. Every removed direction is one the classifier could have used, so
+    over-projection biases capacity downward.
 
     Two guards, both on by default:
 
-      k_tol         Take the SMALLEST K that gets within `k_tol` of the best achievable
-                    reduction, rather than the K that achieves it. This finds the elbow of the
-                    curve, which is where the planted rank actually sits.
+      k_tol         Take the smallest K that gets within `k_tol` of the best achievable
+                    reduction (the elbow of the curve) rather than the K that achieves it.
       min_reduction If the best subspace removes less than this fraction of the baseline
-                    correlation, there is no low-rank structure worth removing, and an EMPTY
-                    subspace is returned (K = 0, the correction becomes a no-op). Without this,
-                    the routine invents structure in isotropic centers and the correction costs
-                    capacity for nothing.
+                    correlation, return an empty subspace (K = 0); the correction is then a
+                    no-op.
 
-    The default min_reduction of 0.10 is a heuristic, and a weak one: the chance-level reduction
-    depends on P, N and the ranks tried, not on a universal constant. With P = 60 centers the
-    search removes about 10% of the baseline from purely isotropic centers, right at the
-    threshold. Passing `n_null > 0` replaces the heuristic with a measured null -- the same search
-    run on matched isotropic centers -- which is the defensible version and what real data
-    deserves. It costs `n_null` extra searches.
+    The default min_reduction of 0.10 is a heuristic: the chance-level reduction depends on P, N
+    and the ranks tried, and with P = 60 centers the search removes about 10% of the baseline
+    from isotropic centers. Passing `n_null > 0` replaces the heuristic with a measured null,
+    the same search run on matched isotropic centers, at the cost of `n_null` extra searches.
 
-    Set k_tol=0 and min_reduction=0 to reproduce the reference's argmin behaviour.
+    Set k_tol=0 and min_reduction=0 to reproduce the reference's argmin rule.
 
     Args:
         Xs: The manifolds, each (N, M_i). Only their centers are used.
@@ -326,13 +297,13 @@ def find_center_subspace(
         k_tol: Elbow tolerance, as a fraction of the best achievable reduction.
         min_reduction: Below this fractional reduction, return no subspace at all.
         n_null: If > 0, measure the chance-level reduction on matched isotropic centers and use
-            it in place of `min_reduction`. Slower, and correct.
+            it in place of `min_reduction`.
         rng: Random generator.
         verbose: Print the residual correlation at each K.
 
     Returns:
-        CenterSubspace. Always inspect `by_K`, `K_argmin` and `reduction` before trusting a
-        corrected capacity: they say whether the structure being removed is real.
+        CenterSubspace. `by_K`, `K_argmin` and `reduction` indicate whether the removed
+        structure is real.
     """
     rng = np.random.default_rng() if rng is None else rng
     Xs = [np.asarray(X, dtype=np.float64) for X in Xs]
@@ -390,11 +361,11 @@ def find_center_subspace(
 
     # Floor the threshold at zero. A negative `reduction` means the best subspace left the
     # centres MORE correlated than they started -- which happens on isotropic data, where the
-    # residual-correlation curve rises with K -- and must always abstain, whatever a noisy null
-    # happened to return.
+    # residual-correlation curve rises with K -- so the routine abstains regardless of the
+    # null.
     if reduction <= max(min_reduction, 0.0):
         # No low-rank structure worth removing. Returning an empty basis makes the projection a
-        # no-op, which is the honest answer, rather than removing directions to chase noise.
+        # no-op rather than removing directions that carry no shared structure.
         return CenterSubspace(
             basis=np.zeros((centers.shape[0], 0)), K=0, residual=baseline, baseline=baseline,
             by_K=by_K, K_argmin=K_argmin, reduction=float(reduction), span=span,

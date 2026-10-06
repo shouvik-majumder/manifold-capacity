@@ -1,33 +1,26 @@
-"""VALIDATION 1 -- points: the closed form, the estimator, and a theory-free simulation.
+"""Validation 1: points. The closed form, the estimator, and a theory-free simulation.
 
-WHAT IS BEING ESTABLISHED
--------------------------
-Three independent routes to the capacity of isolated point manifolds must agree:
+Three routes to the capacity of isolated point manifolds should agree:
 
   (a) the closed form alpha_0(kappa) = 1 / [(1+kappa^2) Phi(kappa) + kappa phi(kappa)],
   (b) the Monte Carlo estimator in `capacity.analyze_manifold`, run through the full public
       path including frame construction,
-  (c) DIRECT SIMULATION: build P points in R^N, label them at random, and ask an exact linear
-      program whether a separating hyperplane exists. Sweep the load, find where separability
-      breaks, extrapolate to N -> infinity.
+  (c) direct simulation: build P points in R^N, label them at random, and ask an exact
+      linear program whether a separating hyperplane exists; sweep the load, find where
+      separability breaks, extrapolate to N -> infinity.
 
-Route (c) is the one that matters. (a) and (b) share the theory: if the theory has been
-transcribed wrongly they agree with each other and are both wrong. (c) never evaluates a replica
-formula, so agreement between (c) and (a) is evidence about the theory's application and not
-merely about the arithmetic.
+(a) and (b) share the theory, so their agreement does not test its transcription. (c) never
+evaluates a replica formula, so agreement between (c) and (a) tests the application of the
+theory. The expected answer is Cover's alpha_c = 2 at kappa = 0.
 
-The expected answer is Cover's alpha_c = 2 at kappa = 0.
+Figure
+------
+Left panel: the three routes against margin. The simulated points carry error bars from the
+binomial spread of the separable fraction.
 
-WHAT TO LOOK FOR IN THE FIGURE
-------------------------------
-Left panel: the three routes on one axis, versus margin. The simulated points carry error bars
-from the binomial spread of the separable fraction; they should sit on the analytic curve.
-
-Right panel: the finite-size story. Separability versus load at several N. The transition
-sharpens as N grows -- that broadening is not noise, it is the finite-size smearing of a
-thermodynamic phase transition, and its width shrinks as 1/sqrt(N). The inset-style second
-trace shows the measured threshold against 1/N; a straight line extrapolating to 2 is the
-result. Reporting only one N would make a few percent of drift invisible.
+Right panel: separability against load at several N. The transition sharpens as N grows,
+with a width of order 1/sqrt(N); the second trace shows the measured threshold against 1/N,
+extrapolating to 2.
 """
 from __future__ import annotations
 
@@ -47,11 +40,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def estimator_curve(kappas, n_t, seed=0):
     """Route (b): the Monte Carlo estimator through the full public path.
 
-    Each margin gets INDEPENDENT Gaussian draws. That matters for interpreting the output:
-    reusing one draw set across margins makes every deviation the same fluctuation seen through
-    a slowly varying function, so the reported z-scores come out nearly identical and a reader
-    cannot tell a systematic bias from a single unlucky draw. Independent draws make the six
-    numbers six separate tests.
+    Each margin gets independent Gaussian draws, so that the reported z-scores are separate
+    tests rather than one fluctuation seen through a slowly varying function.
     """
     rng = np.random.default_rng(seed)
     Xs = synth.points(P=40, N=150, rng=rng)
@@ -71,19 +61,15 @@ def estimator_curve(kappas, n_t, seed=0):
 
 
 def margin_collapse(Ns, alphas, n_seeds, seed=0):
-    """Route (c) at nonzero margin, done as a SCALING COLLAPSE.
+    """Route (c) at nonzero margin, as a scaling collapse.
 
-    A simulation measures the margin geometrically: with unit-norm readout and unit-norm points,
-    kappa_measured = min_i y_i <w, x_i>, which shrinks as ~1/sqrt(P). The theory's kappa is the
-    standardised overlap, kappa_theory = sqrt(N) * kappa_measured (see
-    `analytic.standardise_margin`). Comparing the two without that factor disagrees by orders of
-    magnitude, and the disagreement looks like a capacity error rather than a units error.
+    A simulation measures the margin geometrically: with unit-norm readout and unit-norm
+    points, kappa_measured = min_i y_i <w, x_i>. The theory's kappa is the standardised overlap,
+    kappa_theory = sqrt(N) * kappa_measured (see `analytic.standardise_margin`).
 
-    Rescaling turns the comparison into something much stronger than a single number: measure
-    kappa* across loads at several N, multiply by sqrt(N), and all the curves must fall on top
-    of each other AND on the inverse of alpha_0. A collapse across N cannot happen by accident,
-    and it tests the margin convention -- precisely the sort of misapplied theory that agreement
-    between solvers can never detect.
+    Measuring kappa* across loads at several N and multiplying by sqrt(N) should place all the
+    curves on top of each other and on the inverse of alpha_0. This tests the margin convention,
+    which agreement between solvers cannot.
     """
     out = {}
     for N in Ns:

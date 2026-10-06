@@ -1,55 +1,42 @@
-"""mancap -- manifold capacity by replica mean-field theory, reimplemented and validated.
+"""mancap: manifold capacity by mean-field theoretic manifold analysis (MFTMA).
 
-An implementation of the mean-field theoretic manifold analysis (MFTMA) of Chung, Lee &
-Sompolinsky, "Classification and Geometry of General Perceptual Manifolds", Phys. Rev. X 8,
-031003 (2018), and its correlated-centers extension in Cohen, Chung, Lee & Sompolinsky,
-"Separability and geometry of object manifolds in deep neural networks", Nat. Commun. 11, 746
-(2020).
+An implementation of the replica mean-field theory of Chung, Lee and Sompolinsky,
+"Classification and Geometry of General Perceptual Manifolds", Phys. Rev. X 8, 031003
+(2018), and of the correlated-centers correction of Cohen, Chung, Lee and Sompolinsky,
+"Separability and geometry of object manifolds in deep neural networks", Nat. Commun. 11,
+746 (2020). Written as a learning reproduction; the authors' reference implementation is
+github.com/schung039/neural_manifolds_replicaMFT.
 
-THE QUESTION IT ANSWERS
------------------------
-Given P sets of activation vectors -- one set per category, each set a cloud of points in R^N --
-how many such categories could a single linear readout separate at once, under arbitrary +/-1
-labels? The answer is a load alpha = P/N, the manifold capacity, and it is a single number
-summarising how linearly usable a representation is. It decomposes into an anchor radius R_M and
-an anchor dimension D_M, which say whether capacity was lost because the clouds are large or
-because they are spread over many directions.
+Given P sets of activation vectors in R^N, one per category, the manifold capacity
+alpha = P/N is the largest load at which a single linear readout separates the categories
+under arbitrary binary labels. It decomposes into an anchor radius R_M and an anchor
+dimension D_M.
 
-WHY REIMPLEMENT IT
-------------------
-The reference implementation is correct but slow and undeployable: the inner optimization calls
-cvxopt once per Gaussian sample in a Python loop, and the center-correlation step runs a Stiefel
-manifold optimization for 20000 iterations at every candidate rank. Its dependencies (autograd,
-cvxopt, pymanopt with a long-renamed API) no longer install cleanly. This package reformulates
-the inner problem in its dual, where it is a nonnegative quadratic program whose Gram matrix
-does not depend on the Gaussian sample, which makes it exactly solvable by a finite active-set
-method now and batchable on a GPU later.
+Differences from the reference implementation
+---------------------------------------------
+The inner minimisation is solved in its dual form, a nonnegative quadratic program whose
+Gram matrix does not depend on the Gaussian sample, by an active-set method; the reference
+solves the primal with cvxopt. The correlated-centers correction uses a closed-form gradient
+and a self-contained Stiefel optimiser in place of autograd and pymanopt. Frames are reduced
+to the rank of the manifold offsets rather than to the number of samples, and the rank K of
+the center subspace is chosen by an elbow rule with an optional measured null. Per-manifold
+results agree with the reference draw by draw (scripts/00_crosscheck_reference.py).
 
-HOW IT IS VALIDATED
--------------------
-Capacity is a number with no error bars attached, computed from a Monte Carlo average of the
-solution of an optimization problem. It is very easy to produce a plausible-looking wrong one.
-So the package is organised around independent checks rather than around the estimator:
-
-  analytic.point_capacity   Closed form for points. alpha = 2 at kappa = 0 fixes all conventions.
-  inner.solve_ball          Closed-form inner solution for balls -- an exact oracle on a
-                            manifold that is neither a point nor low dimensional.
-  inner.solve_slsqp         A second, algebraically unrelated solver for the same problem.
-  capacity.analyze_manifold Returns `consistency`, the gap between the objective computed two
-                            ways, so the anchors are tested and not just the capacity.
-  simulate                  Direct simulation: build the manifolds, assign random labels, and
-                            actually search for a separating hyperplane. Sweep P/N to find where
-                            separability breaks, and compare that to the theory. This is the only
-                            test that does not assume the theory is correctly transcribed.
+Validation
+----------
+Closed forms (analytic), a closed-form inner solution for balls (inner.solve_ball), an
+independent SLSQP solver, an internal consistency check on the anchors, and direct
+simulation of the separability threshold (simulate), which does not use the replica
+formulas.
 
 Layout
 ------
-inner      The inner minimization (active set on the dual, SLSQP, closed-form ball).
-capacity   alpha_M, R_M, D_M from the inner solutions; how to combine manifolds.
-frames     Raw activations -> the (D+1)-frames the theory expects; center-correlation diagnostics.
-synth      Synthetic manifolds with known geometry: points, balls, segments, rings, ellipsoids.
-centers    The correlated-centers correction, which real representations need.
-analytic   Closed forms the pipeline must reproduce.
+inner      Inner minimisation: active set on the dual, SLSQP, closed-form ball.
+capacity   alpha_M, R_M, D_M from the inner solutions; combining manifolds.
+frames     Raw activations to (D+1)-frames; center-correlation diagnostics.
+synth      Synthetic manifolds with known geometry.
+centers    Correlated-centers correction.
+analytic   Closed forms and the margin convention.
 simulate   Direct simulation of the separability threshold.
 """
 from __future__ import annotations
